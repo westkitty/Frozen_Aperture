@@ -52,7 +52,7 @@ class FrozenApertureApp {
     this.segWorkbench = null;
 
     this.workbenchOpen = false;
-    this.activeStage = 'assembly';
+    this.activeStage = 'source';
     this.experienceMode = 'frozen_second';
     this.selectedObjectId = null;
     this.selectedSourceObjId = null;
@@ -457,6 +457,41 @@ class FrozenApertureApp {
       if (this.workbenchOpen && this.activeStage === 'objects') this.syncStageUi();
     });
 
+    // Global drag-and-drop for images (.png/.jpg/.webp) and .glb files anywhere on the window
+    window.addEventListener('dragover', (e) => {
+      e.preventDefault();
+    });
+    window.addEventListener('drop', async (e) => {
+      e.preventDefault();
+      const file = e.dataTransfer?.files?.[0];
+      if (!file) return;
+      const lower = String(file.name || '').toLowerCase();
+      try {
+        if (lower.endsWith('.glb')) {
+          const bytes = new Uint8Array(await file.arrayBuffer());
+          const receipt = await this.providers.submitJob(this.project, {
+            providerId: 'manual_glb',
+            sourceObjectId: this.selectedSourceObjId,
+            mode: 'import',
+            operatorInitiated: true,
+            input: { project: this.project, bytes, label: file.name, rights: 'private_unverified' },
+          });
+          if (receipt.state === 'completed') {
+            this.setWorkbenchOpen(true, 'assembly');
+            this.notify(`Imported & validated GLB "${file.name}". Select an object in Assembly and click "Bind Whole GLB".`);
+          } else {
+            this.notify(receipt.message, 'error');
+          }
+        } else {
+          const meta = await ingestImageFile(file);
+          this.setWorkbenchOpen(true, 'source');
+          await this.applyIngestedIllustration(meta);
+        }
+      } catch (err) {
+        this.notify(err.message, 'error');
+      }
+    });
+
     window.addEventListener('keydown', (e) => {
       if ((e.metaKey || e.ctrlKey) && e.key.toLowerCase() === 'k') {
         e.preventDefault();
@@ -616,6 +651,21 @@ class FrozenApertureApp {
     else if (this.activeStage === 'export') this.renderExportPanel(sb, token);
   }
 
+  async applyIngestedIllustration(meta) {
+    this.project.project.sourceIllustration = meta;
+    this.scene.cameras.sourceCamera.imageWidth = meta.width;
+    this.scene.cameras.sourceCamera.imageHeight = meta.height;
+    this.bgBackdropVisible = true;
+    this.renderer.setBackgroundPlate(meta.dataUrl);
+    this.referenceOverlayOpacity = 0.25;
+    this.updateReferenceOverlay();
+    if (this.workbenchOpen && this.activeStage === 'objects') {
+      this.segWorkbench.setImage(meta, this.project.sourceObjects);
+    }
+    this.renderSidebar();
+    this.notify(`Loaded "${meta.name}" (${meta.width}×${meta.height}) onto 3D backdrop. Click "Extract Objects" to cut out figures.`);
+  }
+
   renderSourcePanel(sb) {
     const src = this.project.project.sourceIllustration;
     const bgPlate = this.scene.environment?.backgroundRepresentation;
@@ -624,21 +674,27 @@ class FrozenApertureApp {
       <div class="wb-section">
         <h3 class="wb-title">Source Illustration</h3>
         <div class="notice">
-          Public Calibration Scene active. Private APERTURE artwork is excluded from Git; import any local PNG, JPEG, or WebP or load the synthetic calibration plate.
+          Upload any illustration (PNG, JPEG, WebP) below — or <strong>drag & drop an image or .glb file anywhere onto the window</strong>. Private APERTURE artwork is local-only and not shipped in public Git.
         </div>
         <div class="wb-row">
-          <input type="file" id="in-source-file" aria-label="Import source illustration file" accept="image/png,image/jpeg,image/webp" class="wb-input" style="flex:1" />
+          <input type="file" id="in-source-file" aria-label="Import source illustration file" accept="image/*" class="wb-input" style="flex:1" />
         </div>
         <div class="wb-row">
-          <button class="wb-btn primary" id="btn-load-synthetic-plate">Load Synthetic Calibration Plate</button>
+          <button class="wb-btn primary" id="btn-choose-source">Upload Image…</button>
+          <button class="wb-btn" id="btn-load-synthetic-plate">Load Calibration Plate</button>
         </div>
         ${src ? `
-          <div class="mono">
+          <img src="${src.dataUrl}" alt="Uploaded source illustration preview" style="width:100%;max-height:180px;object-fit:contain;border:1px solid var(--border-subtle);border-radius:4px;background:#05070c;margin:8px 0" />
+          <div class="mono" style="margin-bottom:8px">
             <div>File: ${escapeHtml(src.name)}</div>
             <div>Dims: ${src.width} × ${src.height} (${src.mimeType})</div>
             <div>SHA-256: ${src.sha256.slice(0, 24)}…</div>
           </div>
-        ` : '<div class="empty-state">No source illustration attached yet.</div>'}
+          <div class="wb-row">
+            <button class="wb-btn primary" id="btn-goto-objects">Extract Objects →</button>
+            <button class="wb-btn" id="btn-toggle-bg-3d">${this.bgBackdropVisible ? 'Hide 3D Backdrop' : 'Show in 3D'}</button>
+          </div>
+        ` : '<div class="empty-state">No source illustration attached yet. Click "Upload Image…" or drag an image onto the window.</div>'}
       </div>
 
       <div class="wb-section">
@@ -658,8 +714,7 @@ class FrozenApertureApp {
       <div class="wb-section">
         <h3 class="wb-title">Disocclusion Background Plate</h3>
         <div class="wb-row">
-          <button class="wb-btn primary" id="btn-gen-bg-plate">Generate Background Plate</button>
-          ${bgPlate?.dataUrl ? `<button class="wb-btn" id="btn-toggle-bg-3d">${this.bgBackdropVisible ? 'Hide 3D Backdrop' : 'Show in 3D'}</button>` : ''}
+          <button class="wb-btn primary" id="btn-gen-bg-plate">Generate Clean Background Plate</button>
         </div>
         ${bgPlate?.mode === 'disoccluded_inpainted_plate' ? `
           <div class="mono">
@@ -669,17 +724,20 @@ class FrozenApertureApp {
       </div>
     `;
 
+    sb.querySelector('#btn-choose-source')?.addEventListener('click', () => {
+      sb.querySelector('#in-source-file')?.click();
+    });
+
+    sb.querySelector('#btn-goto-objects')?.addEventListener('click', () => {
+      this.setStage('objects');
+    });
+
     sb.querySelector('#in-source-file')?.addEventListener('change', async (e) => {
       const file = e.target.files?.[0];
       if (!file) return;
       try {
         const meta = await ingestImageFile(file);
-        this.project.project.sourceIllustration = meta;
-        this.scene.cameras.sourceCamera.imageWidth = meta.width;
-        this.scene.cameras.sourceCamera.imageHeight = meta.height;
-        this.updateReferenceOverlay();
-        this.renderSidebar();
-        this.notify(`Ingested ${meta.name} (${meta.width}×${meta.height}).`);
+        await this.applyIngestedIllustration(meta);
       } catch (err) {
         this.notify(err.message, 'error');
       }
@@ -687,12 +745,7 @@ class FrozenApertureApp {
 
     sb.querySelector('#btn-load-synthetic-plate')?.addEventListener('click', async () => {
       const meta = await createSyntheticTestIllustration();
-      this.project.project.sourceIllustration = meta;
-      this.scene.cameras.sourceCamera.imageWidth = meta.width;
-      this.scene.cameras.sourceCamera.imageHeight = meta.height;
-      this.updateReferenceOverlay();
-      this.renderSidebar();
-      this.notify('Loaded Public Synthetic Calibration Plate.');
+      await this.applyIngestedIllustration(meta);
     });
 
     sb.querySelector('#in-ref-opacity')?.addEventListener('input', (e) => {
@@ -751,7 +804,8 @@ class FrozenApertureApp {
 
     sb.querySelector('#btn-toggle-bg-3d')?.addEventListener('click', () => {
       this.bgBackdropVisible = !this.bgBackdropVisible;
-      this.renderer.setBackgroundPlate(this.bgBackdropVisible ? bgPlate?.dataUrl : null);
+      const plateUrl = bgPlate?.dataUrl || src?.dataUrl || null;
+      this.renderer.setBackgroundPlate(this.bgBackdropVisible ? plateUrl : null);
       this.renderSidebar();
     });
   }

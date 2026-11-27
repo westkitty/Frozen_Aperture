@@ -28,31 +28,51 @@ export function validateImageMetadata({ mimeType, byteLength, width, height }) {
   return { valid: errors.length === 0, errors };
 }
 
+function sniffImageMime(bytes, fileName = '', declaredType = '') {
+  if (bytes.length >= 8 && bytes[0] === 0x89 && bytes[1] === 0x50 && bytes[2] === 0x4e && bytes[3] === 0x47) return 'image/png';
+  if (bytes.length >= 3 && bytes[0] === 0xff && bytes[1] === 0xd8 && bytes[2] === 0xff) return 'image/jpeg';
+  if (bytes.length >= 12 && bytes[0] === 0x52 && bytes[1] === 0x49 && bytes[2] === 0x46 && bytes[3] === 0x46 &&
+      bytes[8] === 0x57 && bytes[9] === 0x45 && bytes[10] === 0x42 && bytes[11] === 0x50) return 'image/webp';
+  if (bytes.length >= 6 && bytes[0] === 0x47 && bytes[1] === 0x49 && bytes[2] === 0x46) return 'image/gif';
+  if (bytes.length >= 2 && bytes[0] === 0x42 && bytes[1] === 0x4d) return 'image/bmp';
+  const norm = String(declaredType || '').toLowerCase();
+  if (norm === 'image/jpg') return 'image/jpeg';
+  if (ALLOWED_IMAGE_MIMES.has(norm)) return norm;
+  const ext = String(fileName || '').toLowerCase().split('.').pop();
+  if (ext === 'jpg' || ext === 'jpeg') return 'image/jpeg';
+  if (ext === 'webp') return 'image/webp';
+  if (ext === 'gif') return 'image/gif';
+  if (ext === 'bmp') return 'image/bmp';
+  if (ext === 'png') return 'image/png';
+  return norm.startsWith('image/') ? norm : 'image/png';
+}
+
 export async function ingestImageFile(file) {
   if (!file) throw new Error('No image file provided.');
-  const mimeType = file.type || 'image/png';
   const buf = await file.arrayBuffer();
   const bytes = new Uint8Array(buf);
 
+  if (bytes.byteLength === 0) {
+    throw new Error('Selected image file is empty (0 bytes).');
+  }
   if (bytes.byteLength > RESOURCE_LIMITS.MAX_IMAGE_BYTES) {
     throw new Error(`Image exceeds ${RESOURCE_LIMITS.MAX_IMAGE_BYTES / (1024 * 1024)} MB limit.`);
   }
-  if (!ALLOWED_IMAGE_MIMES.has(mimeType)) {
-    throw new Error(`Unsupported image format: ${mimeType}`);
-  }
 
+  const mimeType = sniffImageMime(bytes, file.name, file.type);
   const sha256 = await sha256Hex(bytes);
   const dataUrl = `data:${mimeType};base64,${bytesToBase64(bytes)}`;
 
   const dims = await new Promise((resolve, reject) => {
     const img = new Image();
     img.onload = () => resolve({ width: img.naturalWidth, height: img.naturalHeight, image: img });
-    img.onerror = () => reject(new Error('Failed to decode image pixels.'));
+    img.onerror = () => reject(new Error(`Browser could not decode "${file.name}" (${mimeType}). Try PNG, JPEG, or WebP.`));
     img.src = dataUrl;
   });
 
+  const normalizedMime = ALLOWED_IMAGE_MIMES.has(mimeType) ? mimeType : 'image/png';
   const check = validateImageMetadata({
-    mimeType,
+    mimeType: normalizedMime,
     byteLength: bytes.byteLength,
     width: dims.width,
     height: dims.height,
@@ -63,7 +83,7 @@ export async function ingestImageFile(file) {
 
   return {
     name: sanitizeLabel(file.name, 'source-illustration.png'),
-    mimeType,
+    mimeType: normalizedMime,
     byteLength: bytes.byteLength,
     width: dims.width,
     height: dims.height,

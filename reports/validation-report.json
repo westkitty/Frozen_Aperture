@@ -1,5 +1,5 @@
 {
-  "generatedAt": "2026-11-27T21:22:08.542Z",
+  "generatedAt": "2026-11-27T21:30:41.926Z",
   "environment": {
     "browser": "Chrome/158.0.8127.36",
     "renderingBackend": "Headless Chromium ANGLE SwiftShader (software WebGL 2 — NOT physical GPU/mobile benchmark)",
@@ -8,8 +8,8 @@
   },
   "artifact": {
     "path": "index.html",
-    "sha256": "bd8b9b81a10239ca73291bb4fc4bdfd2267a506636a92e2212998a895c31c995",
-    "bytes": 835982
+    "sha256": "efdf91be805748478560769328ff0e15b4ad5d26914cf08bfa3f5859a393d57a",
+    "bytes": 838547
   },
   "checks": [
     {
@@ -75,7 +75,7 @@
     {
       "name": "On-demand idle rendering skips redundant GPU frames when static (#19)",
       "passed": true,
-      "detail": "skipped=104"
+      "detail": "skipped=107"
     },
     {
       "name": "Visual pixel-diff confirms distinct Shaded vs Wireframe renders (#25)",
@@ -85,7 +85,7 @@
     {
       "name": "3D TransformControls gizmo (#16) and .fap.zip bundle export (#22) work in browser",
       "passed": true,
-      "detail": "zipBytes=791404"
+      "detail": "zipBytes=791403"
     },
     {
       "name": "114-body stress scene renders with InstancedMesh draw-call batching (#24, #25)",
