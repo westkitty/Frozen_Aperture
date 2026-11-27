@@ -1,5 +1,5 @@
 {
-  "generatedAt": "2026-11-27T21:07:17.233Z",
+  "generatedAt": "2026-11-27T21:10:19.873Z",
   "environment": {
     "browser": "Chrome/158.0.8127.36",
     "renderingBackend": "Headless Chromium ANGLE SwiftShader (software WebGL 2 — NOT physical GPU/mobile benchmark)",
@@ -8,8 +8,8 @@
   },
   "artifact": {
     "path": "index.html",
-    "sha256": "bd99c2cfd753e6a9168443c1b0eb82ff680869e3d5d662e396dc4f4f4b441a4a",
-    "bytes": 814447
+    "sha256": "102e8de760401f41a680bb3c0980983cc9b1a0e63a0782298f554866a82dd987",
+    "bytes": 816414
   },
   "checks": [
     {
@@ -55,7 +55,7 @@
     {
       "name": "Economy quality & Reduced Motion preserve identical simulation outcomes",
       "passed": true,
-      "detail": "hash=89ecbe65, objects=38"
+      "detail": "hash=089f95a9, objects=38"
     },
     {
       "name": "Mobile-width viewport (390x844) renders without crash",
@@ -75,7 +75,7 @@
     {
       "name": "On-demand idle rendering skips redundant GPU frames when static (#19)",
       "passed": true,
-      "detail": "skipped=108"
+      "detail": "skipped=122"
     },
     {
       "name": "Visual pixel-diff confirms distinct Shaded vs Wireframe renders (#25)",
@@ -101,7 +101,7 @@
     "p95FrameTimeMs": 100,
     "drawCalls": 39,
     "triangles": 28376,
-    "geometries": 51,
+    "geometries": 35,
     "textures": 1,
     "objectCount": 114
   },

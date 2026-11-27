@@ -232,7 +232,21 @@ export class SceneRenderer {
   }
 
   attachGizmoToObject(objectId) {
-    const group = this.objectMeshes.get(objectId);
+    let group = this.objectMeshes.get(objectId);
+    if (!group && objectId && this.instancedObjectMap.has(objectId) && this.gizmo.enabled) {
+      const obj = this.sceneDoc?.objects?.find(o => o.id === objectId);
+      if (obj) {
+        this.upsertObjectMesh(obj).then(() => {
+          const promoted = this.objectMeshes.get(objectId);
+          if (promoted && this.gizmo.enabled && this.selectedObjectId === objectId) {
+            this.gizmo.attach(promoted);
+            if (this.gizmoHelper) this.gizmoHelper.visible = true;
+            this.markDirty();
+          }
+        });
+        return;
+      }
+    }
     if (group && this.gizmo.enabled) {
       this.gizmo.attach(group);
       if (this.gizmoHelper) this.gizmoHelper.visible = true;
@@ -471,6 +485,48 @@ export class SceneRenderer {
     this.markDirty();
   }
 
+  demoteFromInstanced(objectId) {
+    const ref = this.instancedObjectMap.get(objectId);
+    if (!ref) return false;
+    const batch = this.instancedBatches.get(ref.shapeKey);
+    if (batch) {
+      this._dummy.position.set(0, -9999, 0);
+      this._dummy.scale.set(0, 0, 0);
+      this._dummy.updateMatrix();
+      batch.mesh.setMatrixAt(ref.index, this._dummy.matrix);
+      batch.mesh.instanceMatrix.needsUpdate = true;
+      batch.ids[ref.index] = null;
+    }
+    this.instancedObjectMap.delete(objectId);
+    return true;
+  }
+
+  disposeGroupResources(group) {
+    if (!group) return;
+    const sharedMats = new Set([this.clayMaterial, this.wireframeMaterial, this.collisionWireMat, this.vortexShaderMat]);
+    group.traverse((child) => {
+      if (!child.isMesh) return;
+      if (child.geometry) child.geometry.dispose();
+      const orig = child.userData?.originalMaterial;
+      if (orig && !sharedMats.has(orig) && typeof orig.dispose === 'function') orig.dispose();
+      if (child.material && child.material !== orig && !sharedMats.has(child.material) && typeof child.material.dispose === 'function') {
+        child.material.dispose();
+      }
+    });
+  }
+
+  resetVisualEffects() {
+    this.clearTrails();
+    for (const slot of this.ripplePool) {
+      slot.active = false;
+      slot.age = 0;
+      slot.mesh.visible = false;
+    }
+    this.vortexShaderMat.uniforms.uTime.value = 0;
+    this.vortexShaderMat.uniforms.uActive.value = 0;
+    this.markDirty();
+  }
+
   buildInstancedBuckets(buckets) {
     for (const [shapeKey, list] of Object.entries(buckets)) {
       if (list.length === 0) continue;
@@ -480,6 +536,10 @@ export class SceneRenderer {
       inst.castShadow = true;
       inst.receiveShadow = true;
       inst.userData.instancedShapeKey = shapeKey;
+      inst.userData.originalMaterial = mat;
+      if (this.inspectionMode === 'clay') inst.material = this.clayMaterial;
+      else if (this.inspectionMode === 'wireframe') inst.material = this.wireframeMaterial;
+
       const color = new THREE.Color();
       const ids = [];
 
@@ -507,13 +567,16 @@ export class SceneRenderer {
 
   clearWorld() {
     this.gizmo.detach();
-    for (const group of this.objectMeshes.values()) this.worldRoot.remove(group);
+    for (const group of this.objectMeshes.values()) {
+      this.worldRoot.remove(group);
+      this.disposeGroupResources(group);
+    }
     this.objectMeshes.clear();
     this.collisionHelpers.clear();
     for (const batch of this.instancedBatches.values()) {
       this.worldRoot.remove(batch.mesh);
       batch.mesh.geometry.dispose();
-      batch.mesh.material.dispose();
+      if (batch.mesh.userData?.originalMaterial) batch.mesh.userData.originalMaterial.dispose();
     }
     this.instancedBatches.clear();
     this.instancedObjectMap.clear();
@@ -522,9 +585,14 @@ export class SceneRenderer {
   }
 
   async upsertObjectMesh(obj) {
+    // (#1) Prevent double-rendering if promoting an instanced fragment to a unique mesh/GLB
+    this.demoteFromInstanced(obj.id);
+
     const existing = this.objectMeshes.get(obj.id);
     if (existing) {
+      if (this.gizmo.object === existing) this.gizmo.detach();
       this.worldRoot.remove(existing);
+      this.disposeGroupResources(existing);
       this.objectMeshes.delete(obj.id);
       this.collisionHelpers.delete(obj.id);
     }

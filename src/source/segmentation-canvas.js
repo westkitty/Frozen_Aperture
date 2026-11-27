@@ -450,7 +450,8 @@ export class SegmentationWorkbench {
     }
 
     ctx.drawImage(this.image, sx, sy, sw, sh, 0, 0, out.width, out.height);
-    ctx.globalCompositeOperation = sourceObject.mask?.inverted ? 'destination-out' : 'destination-in';
+    const canInvert = sourceObject.mask?.type === 'polygon' || sourceObject.mask?.type === 'bitmap';
+    ctx.globalCompositeOperation = (canInvert && sourceObject.mask?.inverted) ? 'destination-out' : 'destination-in';
     ctx.drawImage(maskCanvas, 0, 0);
     ctx.globalCompositeOperation = 'source-over';
 

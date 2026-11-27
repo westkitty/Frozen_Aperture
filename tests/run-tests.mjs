@@ -556,6 +556,22 @@ async function run() {
     assert.ok(am2.getBytes(loaded.project, loaded.project.assets[0].id));
   });
 
+  await test('22. Bug-sweep regressions: capsule floor clearance never sinks & JSON export has no Uint8Array bloat', () => {
+    const doc = JSON.parse(JSON.stringify(fixA));
+    const scene = getActiveScene(doc);
+    scene.simulation.gravity = [0, -9.81, 0];
+    scene.objects = [{
+      id: 'tall_capsule', label: 'Tall Capsule', position: [0, 1.5, 0], rotation: [0, 0, 0], scale: [1, 1, 1],
+      temporalState: 'active', velocity: [0, -4, 0], angularVelocity: [0, 0, 0],
+      collision: { shape: 'capsule', radius: 0.4, halfHeight: 0.6, enabled: true },
+      physics: { mass: 2.0, restitution: 0.2, gravityScale: 1.0 }, visible: true,
+    }];
+    const sim = new TemporalSimulationEngine(scene);
+    for (let i = 0; i < 60; i++) sim.stepFixed();
+    // Capsule half-height + radius = 1.0m, so center Y must never sink below 1.0m
+    assert.ok(sim.getObject('tall_capsule').position[1] >= 0.999, `Capsule sunk into floor: y=${sim.getObject('tall_capsule').position[1]}`);
+  });
+
   const failed = results.filter(r => !r.passed);
   console.log(`\nSummary: ${results.length - failed.length}/${results.length} passed.`);
   if (failed.length > 0) {

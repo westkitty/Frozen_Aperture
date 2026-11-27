@@ -205,6 +205,9 @@ class FrozenApertureApp {
     this.sim = new TemporalSimulationEngine(this.scene, {
       onEvent: (type, payload) => {
         this.audio.playEvent(type, payload);
+        if (type === 'reset' || type === 'undo') {
+          this.renderer.resetVisualEffects();
+        }
         if ((type === 'release' || type === 'propagation' || type === 'vortex_activated') && payload?.position) {
           this.renderer.spawnRipple(payload.position, type === 'vortex_activated' ? 0x6366f1 : 0x38bdf8);
         }
@@ -281,6 +284,11 @@ class FrozenApertureApp {
   setWorkbenchOpen(open, stage = null) {
     this.workbenchOpen = Boolean(open);
     document.getElementById('app').classList.toggle('workbench-open', this.workbenchOpen);
+    if (!this.workbenchOpen && this.renderer) {
+      // (#8) Keep Immersive Play Mode strictly free of authoring gizmos
+      this.gizmoMode = 'off';
+      this.renderer.setGizmoEnabled(false);
+    }
     if (stage) this.setStage(stage);
     else this.syncStageUi();
     setTimeout(() => this.renderer.resize(), 20);
@@ -293,6 +301,10 @@ class FrozenApertureApp {
       return;
     }
     this.activeStage = stageId;
+    if (stageId !== 'assembly' && this.renderer && this.gizmoMode !== 'off') {
+      this.gizmoMode = 'off';
+      this.renderer.setGizmoEnabled(false);
+    }
     this.syncStageUi();
     this.renderSidebar();
   }
@@ -1169,8 +1181,8 @@ class FrozenApertureApp {
     });
   }
 
-  renderExportPanel(sb) {
-    const saved = this.store.listSaved();
+  async renderExportPanel(sb) {
+    const saved = await this.store.listSavedAsync();
     sb.innerHTML = `
       <div class="wb-section">
         <h3 class="wb-title">Project Persistence — IndexedDB & Bundles (#21, #22)</h3>

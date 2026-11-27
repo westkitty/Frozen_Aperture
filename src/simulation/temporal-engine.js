@@ -324,16 +324,18 @@ export class TemporalSimulationEngine {
     }
 
     const subDt = dt / substeps;
+    const subLinDamp = Math.max(0, 1 - (sim.linearDamping ?? 0.04) * subDt);
+    const subAngDamp = Math.max(0, 1 - (sim.angularDamping ?? 0.08) * subDt);
     for (let s = 0; s < substeps; s++) {
-      this.stepSubtick(subDt, sim, objects, vortex, gx, gy, gz, linDamp, angDamp, floorY);
+      this.stepSubtick(subDt, sim, objects, vortex, gx, gy, gz, subLinDamp, subAngDamp, floorY);
     }
 
     // (#14) Velocity-based sleeping for settled active bodies (never sleeps vortex or bodies in mid-air)
     for (let i = 0; i < objects.length; i++) {
       const obj = objects[i];
       if (obj.temporalState !== 'active' || obj.isVortex || obj.physics?.isStatic || vortex) continue;
-      const r = (obj.collision?.radius ?? 0.45) * Math.abs(obj.scale?.[1] ?? 1);
-      const nearFloor = obj.position[1] <= floorY + r + 0.03;
+      const halfHeightY = getBodyAabb(obj).hy;
+      const nearFloor = obj.position[1] <= floorY + halfHeightY + 0.03;
       const linSpeed = Math.hypot(obj.velocity[0], obj.velocity[1], obj.velocity[2]);
       const angSpeed = Math.hypot(obj.angularVelocity[0], obj.angularVelocity[1], obj.angularVelocity[2]);
       if (nearFloor && linSpeed < 0.05 && angSpeed < 0.08) {
@@ -401,9 +403,9 @@ export class TemporalSimulationEngine {
       obj.rotation[1] += obj.angularVelocity[1] * dt;
       obj.rotation[2] += obj.angularVelocity[2] * dt;
 
-      // Floor plane contact with Coulomb friction (#14)
-      const radius = (obj.collision?.radius ?? 0.45) * Math.abs(obj.scale?.[1] ?? 1);
-      const minY = floorY + radius;
+      // Floor plane contact with accurate shape-aware half-height & Coulomb friction (#7, #14)
+      const halfHeightY = getBodyAabb(obj).hy;
+      const minY = floorY + halfHeightY;
       if (obj.position[1] < minY && !obj.isVortex) {
         obj.position[1] = minY;
         if (obj.velocity[1] < 0) {

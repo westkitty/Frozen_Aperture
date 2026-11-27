@@ -69,7 +69,6 @@ export async function ingestImageFile(file) {
     height: dims.height,
     sha256,
     dataUrl,
-    originalBytes: bytes,
     ingestedAt: new Date().toISOString(),
   };
 }
@@ -161,7 +160,6 @@ export async function createSyntheticTestIllustration(width = 1200, height = 750
     height,
     sha256,
     dataUrl,
-    originalBytes: bytes,
     ingestedAt: new Date().toISOString(),
   };
 }
