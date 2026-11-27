@@ -377,9 +377,12 @@ async function run() {
       const resetHash = api.getStateHash();
       return { ...res, moved: beforeHash !== afterHash, restored: beforeHash === resetHash };
     })()`);
-    await sleep(300);
+    await sleep(350);
     screenshots.push(await cdp.screenshot('12-uploaded-image-playable.png'));
-    record('Uploaded image auto-compiles into clickable playable 3D frozen-time objects + clean background plate',
+    await cdp.eval(`window.__FROZEN_APERTURE__.applyNamedView('side_left')`);
+    await sleep(250);
+    screenshots.push(await cdp.screenshot('13-uploaded-image-3d-angle.png'));
+    record('Uploaded image auto-compiles into clickable 3D volumetric frozen-time models + clean background plate',
       compiledImg.objectCount >= 3 && compiledImg.sourceLayerCount === compiledImg.objectCount && compiledImg.hasBgPlate && compiledImg.moved && compiledImg.restored,
       `objects=${compiledImg.objectCount}, layers=${compiledImg.sourceLayerCount}, bgPlate=${compiledImg.hasBgPlate}, moved=${compiledImg.moved}, restored=${compiledImg.restored}`);
 

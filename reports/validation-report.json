@@ -1,5 +1,5 @@
 {
-  "generatedAt": "2026-11-27T22:03:15.602Z",
+  "generatedAt": "2026-11-27T22:08:09.275Z",
   "environment": {
     "browser": "Chrome/158.0.8127.36",
     "renderingBackend": "Headless Chromium ANGLE SwiftShader (software WebGL 2 — NOT physical GPU/mobile benchmark)",
@@ -8,8 +8,8 @@
   },
   "artifact": {
     "path": "index.html",
-    "sha256": "d0a8be20d32d089e4513ffa55892a1834afc3388a6e5007e8aa31cbad8470e70",
-    "bytes": 853818
+    "sha256": "2dc46411472d8d6f22d8628b11a35c1d7eed29332a708fb9a80eb7957a4191fa",
+    "bytes": 856891
   },
   "checks": [
     {
@@ -75,7 +75,7 @@
     {
       "name": "On-demand idle rendering skips redundant GPU frames when static (#19)",
       "passed": true,
-      "detail": "skipped=132"
+      "detail": "skipped=118"
     },
     {
       "name": "Visual pixel-diff confirms distinct Shaded vs Wireframe renders (#25)",
@@ -85,7 +85,7 @@
     {
       "name": "3D TransformControls gizmo (#16) and .fap.zip bundle export (#22) work in browser",
       "passed": true,
-      "detail": "zipBytes=791404"
+      "detail": "zipBytes=791403"
     },
     {
       "name": "114-body stress scene renders with InstancedMesh draw-call batching (#24, #25)",
@@ -93,7 +93,7 @@
       "detail": "objects=114, instanced=102, drawCalls=39"
     },
     {
-      "name": "Uploaded image auto-compiles into clickable playable 3D frozen-time objects + clean background plate",
+      "name": "Uploaded image auto-compiles into clickable 3D volumetric frozen-time models + clean background plate",
       "passed": true,
       "detail": "objects=4, layers=4, bgPlate=true, moved=true, restored=true"
     }
@@ -104,9 +104,9 @@
     "note": "Measured under headless SwiftShader software WebGL 2; not representative of native hardware-accelerated GPU frame rates.",
     "medianFrameTimeMs": 16.7,
     "p95FrameTimeMs": 100,
-    "drawCalls": 11,
-    "triangles": 82,
-    "geometries": 22,
+    "drawCalls": 7,
+    "triangles": 12730,
+    "geometries": 18,
     "textures": 6,
     "objectCount": 4
   },
@@ -122,6 +122,7 @@
     "reports/screenshots/09-workbench-assembly.png",
     "reports/screenshots/10-mobile-viewport.png",
     "reports/screenshots/11-stress-114-bodies-instanced.png",
-    "reports/screenshots/12-uploaded-image-playable.png"
+    "reports/screenshots/12-uploaded-image-playable.png",
+    "reports/screenshots/13-uploaded-image-3d-angle.png"
   ]
 }

@@ -16,6 +16,7 @@ import { TransformControls } from 'three/examples/jsm/controls/TransformControls
 import { GLTFLoader } from 'three/examples/jsm/loaders/GLTFLoader.js';
 import { isTemporallyFrozen } from '../simulation/temporal-engine.js';
 import { createBlackLiquidVortexMaterial } from './vortex-shader.js';
+import { buildInflatedMeshData } from './volumetric-inflator.js';
 
 export class SceneRenderer {
   constructor(container, { assetManager, onSelectObject = null, onObjectTap = null, onTransformCommit = null, onContextLost = null } = {}) {
@@ -696,32 +697,82 @@ export class SceneRenderer {
   }
 
   buildSourceLayerVisual(group, obj) {
-    let tex = this.textureCache.get(obj.layerDataUrl);
-    if (!tex) {
-      tex = new THREE.TextureLoader().load(obj.layerDataUrl, () => this.markDirty());
-      tex.colorSpace = THREE.SRGBColorSpace;
-      this.textureCache.set(obj.layerDataUrl, tex);
-    }
     const aspect = obj.layerAspect || 0.7;
     const h = obj.layerWorldHeight || 1.8;
     const w = obj.layerWorldWidth || (h * aspect);
+
+    const inflateMeshFromImage = (mesh, img) => {
+      if (!img || !img.naturalWidth || !img.naturalHeight) return;
+      const maxGrid = 44;
+      const scale = Math.min(1, maxGrid / Math.max(img.naturalWidth, img.naturalHeight));
+      const gw = Math.max(12, Math.round(img.naturalWidth * scale));
+      const gh = Math.max(12, Math.round(img.naturalHeight * scale));
+
+      const c = document.createElement('canvas');
+      c.width = gw;
+      c.height = gh;
+      const ctx = c.getContext('2d');
+      ctx.drawImage(img, 0, 0, gw, gh);
+      const rgba = ctx.getImageData(0, 0, gw, gh).data;
+
+      const data = buildInflatedMeshData(rgba, gw, gh, w, h, {
+        alphaThreshold: 40,
+        depthRatio: 0.28,
+        reliefStrength: 0.18,
+      });
+      if (data.triangleCount < 4) return;
+
+      const volGeo = new THREE.BufferGeometry();
+      volGeo.setAttribute('position', new THREE.BufferAttribute(data.positions, 3));
+      volGeo.setAttribute('uv', new THREE.BufferAttribute(data.uvs, 2));
+      volGeo.setIndex(new THREE.BufferAttribute(data.indices, 1));
+      volGeo.computeVertexNormals();
+      volGeo.computeBoundingBox();
+      volGeo.computeBoundingSphere();
+
+      const oldGeo = mesh.geometry;
+      mesh.geometry = volGeo;
+      if (oldGeo) oldGeo.dispose();
+      mesh.userData.volumetricInflated = true;
+      this.markDirty();
+    };
+
     const geo = new THREE.PlaneGeometry(w, h);
+    let tex = this.textureCache.get(obj.layerDataUrl);
     const mat = new THREE.MeshStandardMaterial({
-      map: tex,
-      emissiveMap: tex,
+      map: tex || null,
+      emissiveMap: tex || null,
       emissive: 0xffffff,
-      emissiveIntensity: 0.72,
+      emissiveIntensity: 0.45,
       transparent: true,
-      alphaTest: 0.05,
-      side: THREE.DoubleSide,
-      roughness: 0.55,
-      metalness: 0.05,
+      alphaTest: 0.08,
+      side: THREE.FrontSide,
+      roughness: 0.42,
+      metalness: 0.12,
       fog: false,
     });
     const mesh = new THREE.Mesh(geo, mat);
     mesh.userData.isSourceLayer = true;
     mesh.castShadow = true;
+    mesh.receiveShadow = true;
     group.add(mesh);
+
+    if (!tex) {
+      tex = new THREE.TextureLoader().load(obj.layerDataUrl, (loadedTex) => {
+        inflateMeshFromImage(mesh, loadedTex.image);
+      });
+      tex.colorSpace = THREE.SRGBColorSpace;
+      this.textureCache.set(obj.layerDataUrl, tex);
+      mat.map = tex;
+      mat.emissiveMap = tex;
+      mat.needsUpdate = true;
+    } else if (tex.image && tex.image.complete && tex.image.naturalWidth > 0) {
+      inflateMeshFromImage(mesh, tex.image);
+    } else {
+      const im = new Image();
+      im.onload = () => inflateMeshFromImage(mesh, im);
+      im.src = obj.layerDataUrl;
+    }
   }
 
   async loadGlbGroup(assetId) {
@@ -903,7 +954,7 @@ export class SceneRenderer {
         group.traverse((child) => {
           if (child.isMesh && !child.userData.isCollisionHelper && child.material?.emissiveIntensity !== undefined) {
             if (child.userData.isSourceLayer) {
-              child.material.emissiveIntensity = isFrozen ? 0.72 : 0.95;
+              child.material.emissiveIntensity = isFrozen ? 0.45 : 0.72;
             } else {
               child.material.emissiveIntensity = isFrozen ? 0.16 : 0.42;
             }

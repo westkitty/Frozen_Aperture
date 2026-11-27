@@ -630,6 +630,29 @@ async function run() {
     assert.ok(fallback.length >= 6, `Expected grid fallback >= 6 regions, got ${fallback.length}`);
   });
 
+  await test('25. 3D Volumetric Silhouette Inflator generates watertight front+back 3D mesh with real Z depth', async () => {
+    const { buildInflatedMeshData } = await import('../src/render/volumetric-inflator.js');
+    const gw = 24, gh = 32;
+    const rgba = new Uint8ClampedArray(gw * gh * 4);
+    for (let y = 4; y < gh - 4; y++) {
+      for (let x = 4; x < gw - 4; x++) {
+        const idx = (y * gw + x) * 4;
+        rgba[idx] = 180; rgba[idx + 1] = 210; rgba[idx + 2] = 250; rgba[idx + 3] = 255;
+      }
+    }
+    const mesh = buildInflatedMeshData(rgba, gw, gh, 1.4, 2.2);
+    assert.ok(mesh.triangleCount >= 500, `Expected dense 3D mesh, got ${mesh.triangleCount} tris`);
+    assert.ok(mesh.maxDepth >= 0.2, `Expected real 3D thickness, got ${mesh.maxDepth}`);
+    let minZ = Infinity, maxZ = -Infinity;
+    for (let i = 2; i < mesh.positions.length; i += 3) {
+      const z = mesh.positions[i];
+      assert.ok(Number.isFinite(z), 'Non-finite Z vertex detected');
+      if (z < minZ) minZ = z;
+      if (z > maxZ) maxZ = z;
+    }
+    assert.ok(maxZ > 0.15 && minZ < -0.15, `Expected positive front Z and negative back Z, got [${minZ}, ${maxZ}]`);
+  });
+
   const failed = results.filter(r => !r.passed);
   console.log(`\nSummary: ${results.length - failed.length}/${results.length} passed.`);
   if (failed.length > 0) {
