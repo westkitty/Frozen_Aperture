@@ -124,14 +124,15 @@ class FrozenApertureApp {
     const app = document.getElementById('app');
     app.innerHTML = `
       <header id="workbench-topbar" role="banner">
-        <div class="brand">
-          <span class="brand-dot"></span>
+        <h1 class="brand">
+          <span class="brand-dot" aria-hidden="true"></span>
           <span>Frozen Aperture</span>
-        </div>
+        </h1>
         <nav class="stage-tabs" role="tablist" aria-label="Authoring Workflow">
-          ${WORKFLOW_STAGES.map(s => `<button class="stage-tab" data-stage="${s.id}" role="tab">${s.label}</button>`).join('')}
+          ${WORKFLOW_STAGES.map((s, idx) => `<button class="stage-tab" id="tab-${s.id}" data-stage="${s.id}" role="tab" aria-selected="${s.id === this.activeStage ? 'true' : 'false'}" aria-controls="workbench-sidebar" tabindex="${idx === 0 ? '0' : '-1'}">${s.label}</button>`).join('')}
         </nav>
-        <div>
+        <div class="wb-row" style="margin:0;flex-wrap:nowrap">
+          <button class="wb-btn" id="btn-open-cmd" title="Command Palette (Ctrl/Cmd+K)" aria-label="Open Command Palette">⌘K</button>
           <button class="wb-btn primary" id="btn-exit-workbench">Immersive Play</button>
         </div>
       </header>
@@ -163,40 +164,61 @@ class FrozenApertureApp {
             </div>
           </section>
 
+          <div id="play-options-popover" role="dialog" aria-label="Play Display and Accessibility Options">
+            <div class="popover-row">
+              <label class="popover-label" for="play-mode-select">Experience Mode</label>
+              <select class="play-select" id="play-mode-select">
+                <option value="frozen_second">Frozen Second</option>
+                <option value="living_illustration">Living Illustration</option>
+                <option value="world_explorer">World Explorer</option>
+                <option value="object_lab">Object Lab</option>
+                <option value="scene_assembly">Scene Assembly</option>
+              </select>
+            </div>
+            <div class="popover-row">
+              <label class="popover-label" for="play-inspect-select">Inspection Shading</label>
+              <select class="play-select" id="play-inspect-select">
+                <option value="shaded">Shaded</option>
+                <option value="clay">Clay</option>
+                <option value="wireframe">Wireframe</option>
+              </select>
+            </div>
+            <div class="popover-row">
+              <label class="popover-label" for="play-quality-select">Quality Tier</label>
+              <select class="play-select" id="play-quality-select">
+                <option value="high">High</option>
+                <option value="balanced">Balanced</option>
+                <option value="economy">Economy</option>
+              </select>
+            </div>
+            <div class="popover-row-inline">
+              <button class="play-btn" id="play-source-view" title="Return to calibrated source camera">Source View</button>
+              <button class="play-btn" id="play-reduced-motion" aria-pressed="false" title="Toggle reduced motion">Reduced Motion</button>
+              <button class="play-btn" id="play-audio" aria-pressed="false" title="Toggle spatial audio">Spatial Audio</button>
+            </div>
+          </div>
+
           <div id="play-bar" role="toolbar" aria-label="Immersive Play Controls">
             <button class="play-btn" id="play-undo" title="Undo last temporal action">Undo</button>
             <button class="play-btn" id="play-reset" title="Reset scene to initial state">Reset</button>
-            <button class="play-btn" id="play-source-view" title="Return to calibrated source camera">Source View</button>
             <button class="play-btn" id="play-impact" title="Release impact weight for three-body test">Impact Test</button>
-            <span class="play-sep"></span>
-            <select class="play-select" id="play-mode-select" aria-label="Experience Mode">
-              <option value="frozen_second">Frozen Second</option>
-              <option value="living_illustration">Living Illustration</option>
-              <option value="world_explorer">World Explorer</option>
-              <option value="object_lab">Object Lab</option>
-              <option value="scene_assembly">Scene Assembly</option>
-            </select>
-            <select class="play-select" id="play-inspect-select" aria-label="Inspection Shading">
-              <option value="shaded">Shaded</option>
-              <option value="clay">Clay</option>
-              <option value="wireframe">Wireframe</option>
-            </select>
-            <select class="play-select" id="play-quality-select" aria-label="Quality Tier">
-              <option value="high">High</option>
-              <option value="balanced">Balanced</option>
-              <option value="economy">Economy</option>
-            </select>
-            <button class="play-btn" id="play-reduced-motion" aria-pressed="false" title="Toggle reduced motion">Motion</button>
-            <button class="play-btn" id="play-audio" aria-pressed="false" title="Toggle spatial audio">Audio</button>
-            <span class="play-sep"></span>
+            <button class="play-btn" id="play-options-toggle" aria-expanded="false" aria-controls="play-options-popover">Options</button>
+            <span class="play-sep" aria-hidden="true"></span>
             <button class="play-btn primary" id="btn-open-workbench">Workbench</button>
           </div>
 
           <div id="toast" role="status" aria-live="polite"></div>
         </div>
 
-        <aside id="workbench-sidebar" aria-label="Authoring Inspector"></aside>
+        <aside id="workbench-sidebar" aria-label="Authoring Inspector" role="tabpanel"></aside>
       </main>
+
+      <div id="cmd-palette-backdrop" role="dialog" aria-modal="true" aria-label="Command Palette">
+        <div id="cmd-palette">
+          <input id="cmd-input" type="search" placeholder="Jump to stage, camera view, shading, or action..." aria-label="Filter commands" />
+          <div id="cmd-list" role="listbox" aria-label="Available commands"></div>
+        </div>
+      </div>
     `;
   }
 
@@ -311,8 +333,13 @@ class FrozenApertureApp {
 
   syncStageUi() {
     document.querySelectorAll('.stage-tab').forEach(btn => {
-      btn.classList.toggle('active', btn.dataset.stage === this.activeStage);
+      const isActive = btn.dataset.stage === this.activeStage;
+      btn.classList.toggle('active', isActive);
+      btn.setAttribute('aria-selected', String(isActive));
+      btn.setAttribute('tabindex', isActive ? '0' : '-1');
     });
+    const sb = document.getElementById('workbench-sidebar');
+    if (sb) sb.setAttribute('aria-labelledby', `tab-${this.activeStage}`);
     const showSeg = this.workbenchOpen && this.activeStage === 'objects';
     document.getElementById('seg-stage').classList.toggle('active', showSeg);
     if (showSeg) {
@@ -322,6 +349,93 @@ class FrozenApertureApp {
       canvas.height = Math.max(360, wrap.clientHeight || 520);
       this.segWorkbench.setImage(this.project.project.sourceIllustration, this.project.sourceObjects);
     }
+  }
+
+  async runWithBusyButton(btn, busyLabel, fn) {
+    if (!btn) return fn();
+    const prev = btn.textContent;
+    btn.disabled = true;
+    btn.setAttribute('aria-busy', 'true');
+    btn.textContent = busyLabel;
+    try {
+      return await fn();
+    } finally {
+      btn.disabled = false;
+      btn.removeAttribute('aria-busy');
+      btn.textContent = prev;
+    }
+  }
+
+  toggleOptionsPopover(force = null) {
+    const pop = document.getElementById('play-options-popover');
+    const trigger = document.getElementById('play-options-toggle');
+    if (!pop || !trigger) return;
+    const next = force !== null ? Boolean(force) : !pop.classList.contains('open');
+    pop.classList.toggle('open', next);
+    trigger.setAttribute('aria-expanded', String(next));
+    trigger.classList.toggle('active', next);
+    if (!next) trigger.focus();
+  }
+
+  getCommandItems() {
+    const items = [
+      ...WORKFLOW_STAGES.map(s => ({ label: `Stage: ${s.label}`, category: 'Workbench', run: () => this.setWorkbenchOpen(true, s.id) })),
+      { label: 'Mode: Immersive Play', category: 'View', run: () => this.setWorkbenchOpen(false) },
+      { label: 'Shading: Shaded', category: 'Inspect', run: () => this.renderer.setInspectionMode('shaded') },
+      { label: 'Shading: Clay', category: 'Inspect', run: () => this.renderer.setInspectionMode('clay') },
+      { label: 'Shading: Wireframe', category: 'Inspect', run: () => this.renderer.setInspectionMode('wireframe') },
+      { label: 'Simulation: Release Impact Weight', category: 'Sim', run: () => this.sim.releaseObject('obj_impact_weight') },
+      { label: 'Simulation: Toggle Central Vortex', category: 'Sim', run: () => this.sim.toggleObject('obj_vortex_core') },
+      { label: 'Simulation: Undo', category: 'Sim', run: () => this.sim.undo() },
+      { label: 'Simulation: Reset Scene', category: 'Sim', run: () => this.sim.reset() },
+      ...(this.scene?.cameras?.namedViews || []).map(v => ({
+        label: `Camera: ${v.label}`,
+        category: 'Camera',
+        run: () => this.renderer.applyCameraPose(v),
+      })),
+    ];
+    return items;
+  }
+
+  openCommandPalette() {
+    const backdrop = document.getElementById('cmd-palette-backdrop');
+    const input = document.getElementById('cmd-input');
+    if (!backdrop || !input) return;
+    this._cmdPrevFocus = document.activeElement;
+    backdrop.classList.add('open');
+    input.value = '';
+    this.renderCommandList('');
+    input.focus();
+  }
+
+  closeCommandPalette() {
+    const backdrop = document.getElementById('cmd-palette-backdrop');
+    if (!backdrop) return;
+    backdrop.classList.remove('open');
+    if (this._cmdPrevFocus && typeof this._cmdPrevFocus.focus === 'function') {
+      this._cmdPrevFocus.focus();
+    }
+  }
+
+  renderCommandList(query) {
+    const list = document.getElementById('cmd-list');
+    if (!list) return;
+    const q = String(query || '').trim().toLowerCase();
+    const matches = this.getCommandItems().filter(it => !q || it.label.toLowerCase().includes(q) || it.category.toLowerCase().includes(q));
+    list.innerHTML = matches.map((it, idx) => `
+      <button class="cmd-item" role="option" data-cmd-idx="${idx}">
+        <span>${escapeHtml(it.label)}</span>
+        <span class="badge">${escapeHtml(it.category)}</span>
+      </button>
+    `).join('') || '<div class="empty-state">No matching commands.</div>';
+
+    list.querySelectorAll('[data-cmd-idx]').forEach(btn => {
+      btn.addEventListener('click', () => {
+        const chosen = matches[Number(btn.dataset.cmdIdx)];
+        this.closeCommandPalette();
+        if (chosen) chosen.run();
+      });
+    });
   }
 
   updateReferenceOverlay() {
@@ -344,6 +458,25 @@ class FrozenApertureApp {
     });
 
     window.addEventListener('keydown', (e) => {
+      if ((e.metaKey || e.ctrlKey) && e.key.toLowerCase() === 'k') {
+        e.preventDefault();
+        const open = document.getElementById('cmd-palette-backdrop')?.classList.contains('open');
+        if (open) this.closeCommandPalette();
+        else this.openCommandPalette();
+        return;
+      }
+
+      if (e.key === 'Escape') {
+        if (document.getElementById('cmd-palette-backdrop')?.classList.contains('open')) {
+          this.closeCommandPalette();
+          return;
+        }
+        if (document.getElementById('play-options-popover')?.classList.contains('open')) {
+          this.toggleOptionsPopover(false);
+          return;
+        }
+      }
+
       if (e.target && ['INPUT', 'TEXTAREA', 'SELECT'].includes(e.target.tagName)) return;
       if (e.key === 'Escape') {
         if (this.renderer.isolatedObjectId) {
@@ -356,7 +489,6 @@ class FrozenApertureApp {
         e.preventDefault();
         this.sim.undo();
       } else if (!this.workbenchOpen && e.key === 'Tab' && this.scene?.objects?.length) {
-        // (#23) Keyboard-first object cycling in Immersive Play Mode
         e.preventDefault();
         const objs = this.scene.objects;
         const curIdx = objs.findIndex(o => o.id === this.selectedObjectId);
@@ -373,7 +505,36 @@ class FrozenApertureApp {
       }
     });
 
-    document.getElementById('btn-open-workbench').addEventListener('click', () => this.setWorkbenchOpen(true, this.activeStage));
+    // Command palette events
+    document.getElementById('btn-open-cmd')?.addEventListener('click', () => this.openCommandPalette());
+    document.getElementById('cmd-palette-backdrop')?.addEventListener('click', (e) => {
+      if (e.target.id === 'cmd-palette-backdrop') this.closeCommandPalette();
+    });
+    document.getElementById('cmd-input')?.addEventListener('input', (e) => this.renderCommandList(e.target.value));
+
+    // WAI-ARIA ArrowLeft/ArrowRight/Home/End roving tabindex on stage tabs ([ST-02])
+    const tabList = document.querySelector('.stage-tabs');
+    tabList?.addEventListener('keydown', (e) => {
+      const tabs = Array.from(tabList.querySelectorAll('.stage-tab'));
+      const idx = tabs.indexOf(document.activeElement);
+      if (idx === -1) return;
+      let next = null;
+      if (e.key === 'ArrowRight') next = (idx + 1) % tabs.length;
+      else if (e.key === 'ArrowLeft') next = (idx - 1 + tabs.length) % tabs.length;
+      else if (e.key === 'Home') next = 0;
+      else if (e.key === 'End') next = tabs.length - 1;
+      if (next !== null) {
+        e.preventDefault();
+        tabs[next].focus();
+        this.setStage(tabs[next].dataset.stage);
+      }
+    });
+
+    document.getElementById('play-options-toggle')?.addEventListener('click', () => this.toggleOptionsPopover());
+    document.getElementById('btn-open-workbench').addEventListener('click', () => {
+      this.toggleOptionsPopover(false);
+      this.setWorkbenchOpen(true, this.activeStage);
+    });
     document.getElementById('btn-exit-workbench').addEventListener('click', () => this.setWorkbenchOpen(false));
 
     document.querySelectorAll('.stage-tab').forEach(btn => {
@@ -457,14 +618,16 @@ class FrozenApertureApp {
 
   renderSourcePanel(sb) {
     const src = this.project.project.sourceIllustration;
+    const bgPlate = this.scene.environment?.backgroundRepresentation;
     sb.innerHTML = `
+      <h2 class="stage-heading">Source & Calibration</h2>
       <div class="wb-section">
         <h3 class="wb-title">Source Illustration</h3>
         <div class="notice">
-          Public Calibration Scene active. Private APERTURE artwork is excluded from Git; import any local PNG/JPEG/WebP or load the synthetic calibration plate to test end-to-end extraction.
+          Public Calibration Scene active. Private APERTURE artwork is excluded from Git; import any local PNG, JPEG, or WebP or load the synthetic calibration plate.
         </div>
         <div class="wb-row">
-          <input type="file" id="in-source-file" accept="image/png,image/jpeg,image/webp" class="wb-input" style="flex:1" />
+          <input type="file" id="in-source-file" aria-label="Import source illustration file" accept="image/png,image/jpeg,image/webp" class="wb-input" style="flex:1" />
         </div>
         <div class="wb-row">
           <button class="wb-btn primary" id="btn-load-synthetic-plate">Load Synthetic Calibration Plate</button>
@@ -475,14 +638,14 @@ class FrozenApertureApp {
             <div>Dims: ${src.width} × ${src.height} (${src.mimeType})</div>
             <div>SHA-256: ${src.sha256.slice(0, 24)}…</div>
           </div>
-        ` : '<div class="mono">No source illustration attached yet.</div>'}
+        ` : '<div class="empty-state">No source illustration attached yet.</div>'}
       </div>
 
       <div class="wb-section">
-        <h3 class="wb-title">Source Camera & Calibration (#3)</h3>
+        <h3 class="wb-title">Source Camera & Calibration</h3>
         <div class="wb-row">
           <label for="in-ref-opacity">Reference Opacity</label>
-          <input type="range" id="in-ref-opacity" min="0" max="1" step="0.05" value="${this.referenceOverlayOpacity}" style="flex:1" />
+          <input type="range" id="in-ref-opacity" aria-label="Reference overlay opacity" min="0" max="1" step="0.05" value="${this.referenceOverlayOpacity}" style="flex:1" />
           <span class="mono">${Math.round(this.referenceOverlayOpacity * 100)}%</span>
         </div>
         <div class="wb-row">
@@ -493,15 +656,16 @@ class FrozenApertureApp {
       </div>
 
       <div class="wb-section">
-        <h3 class="wb-title">Disocclusion Background Plate (#5)</h3>
+        <h3 class="wb-title">Disocclusion Background Plate</h3>
         <div class="wb-row">
-          <button class="wb-btn primary" id="btn-gen-bg-plate">Generate Clean Background Plate</button>
+          <button class="wb-btn primary" id="btn-gen-bg-plate">Generate Background Plate</button>
+          ${bgPlate?.dataUrl ? `<button class="wb-btn" id="btn-toggle-bg-3d">${this.bgBackdropVisible ? 'Hide 3D Backdrop' : 'Show in 3D'}</button>` : ''}
         </div>
-        ${this.scene.environment?.backgroundRepresentation?.mode === 'disoccluded_inpainted_plate' ? `
+        ${bgPlate?.mode === 'disoccluded_inpainted_plate' ? `
           <div class="mono">
-            Mode: disoccluded_inpainted_plate · Coverage: ${Math.round((this.scene.environment.backgroundRepresentation.coverage || 0) * 100)}% · Confidence: ${Math.round((this.scene.environment.backgroundRepresentation.confidence || 0) * 100)}% (collisionReady: false)
+            Coverage: ${Math.round((bgPlate.coverage || 0) * 100)}% · Confidence: ${Math.round((bgPlate.confidence || 0) * 100)}% · Worker: ${bgPlate.offloadedToWorker ? 'yes' : 'main'} (collisionReady: false)
           </div>
-        ` : '<div class="mono">No inpainted background plate generated yet.</div>'}
+        ` : '<div class="empty-state">Generate an inpainted background plate to inspect disocclusion continuity while orbiting.</div>'}
       </div>
     `;
 
@@ -570,15 +734,25 @@ class FrozenApertureApp {
       }
     });
 
-    sb.querySelector('#btn-gen-bg-plate')?.addEventListener('click', async () => {
-      try {
-        const plate = await generateBackgroundPlateFromSource(this.project.project.sourceIllustration, this.project.sourceObjects);
-        this.scene.environment.backgroundRepresentation = plate;
-        this.renderSidebar();
-        this.notify(`Generated disoccluded background plate (${plate.inpaintedPixels} px inpainted).`);
-      } catch (err) {
-        this.notify(err.message, 'error');
-      }
+    sb.querySelector('#btn-gen-bg-plate')?.addEventListener('click', async (e) => {
+      await this.runWithBusyButton(e.currentTarget, 'Inpainting…', async () => {
+        try {
+          const plate = await generateBackgroundPlateFromSource(this.project.project.sourceIllustration, this.project.sourceObjects);
+          this.scene.environment.backgroundRepresentation = plate;
+          this.bgBackdropVisible = true;
+          this.renderer.setBackgroundPlate(plate.dataUrl);
+          this.renderSidebar();
+          this.notify(`Generated disoccluded background plate (${plate.inpaintedPixels} px inpainted).`);
+        } catch (err) {
+          this.notify(err.message, 'error');
+        }
+      });
+    });
+
+    sb.querySelector('#btn-toggle-bg-3d')?.addEventListener('click', () => {
+      this.bgBackdropVisible = !this.bgBackdropVisible;
+      this.renderer.setBackgroundPlate(this.bgBackdropVisible ? bgPlate?.dataUrl : null);
+      this.renderSidebar();
     });
   }
 
@@ -587,10 +761,11 @@ class FrozenApertureApp {
     const sel = objs.find(o => o.id === this.selectedSourceObjId) || objs[0] || null;
 
     sb.innerHTML = `
+      <h2 class="stage-heading">Object Extraction</h2>
       <div class="wb-section">
         <h3 class="wb-title">Extracted Source Objects (${objs.length})</h3>
         <div class="notice">
-          Draw Rect/Polygon masks on the left. In <strong>Select</strong> mode, drag polygon vertices, <strong>Shift+click</strong> an edge to insert a vertex, or <strong>right-click</strong> a vertex to delete it (#2).
+          Draw Rect/Polygon masks on the left. In <strong>Select</strong> mode, drag polygon vertices, <strong>Shift+click</strong> an edge to insert a vertex, or <strong>right-click</strong> a vertex to delete it.
         </div>
         <div class="wb-list">
           ${objs.map(o => `
@@ -598,25 +773,25 @@ class FrozenApertureApp {
               <span>${escapeHtml(o.label)}</span>
               <span class="badge">${escapeHtml(o.reconstructionStatus || 'extracted')}</span>
             </button>
-          `).join('') || '<div class="mono">No source objects yet.</div>'}
+          `).join('') || '<div class="empty-state">No source objects extracted yet.</div>'}
         </div>
       </div>
 
       ${sel ? `
         <div class="wb-section">
-          <h3 class="wb-title">Selected Source Object & Mask Refinement (#1)</h3>
+          <h3 class="wb-title">Selected Object & Mask Refinement</h3>
           <div class="wb-row">
-            <input class="wb-input" id="in-src-label" value="${escapeHtml(sel.label)}" style="flex:1" />
+            <input class="wb-input" id="in-src-label" aria-label="Source object label" value="${escapeHtml(sel.label)}" style="flex:1" />
             <button class="wb-btn" id="btn-rename-src">Rename</button>
           </div>
           <div class="mono" style="margin-bottom:8px">
             ID: ${escapeHtml(sel.id)} · BBox: ${sel.bbox ? `${sel.bbox.x},${sel.bbox.y} (${sel.bbox.w}×${sel.bbox.h})` : 'none'}
           </div>
           <div class="wb-row">
-            <label class="mono">Feather(px)</label>
-            <input class="wb-input" type="number" min="0" max="24" id="in-mask-feather" value="${this.segWorkbench.featherPx}" style="width:64px" />
-            <label class="mono">Dilate/Erode</label>
-            <input class="wb-input" type="number" min="-12" max="12" id="in-mask-morph" value="${this.segWorkbench.morphologyPx}" style="width:64px" />
+            <label class="mono" for="in-mask-feather">Feather(px)</label>
+            <input class="wb-input" type="number" min="0" max="24" id="in-mask-feather" value="${this.segWorkbench.featherPx}" style="width:68px" />
+            <label class="mono" for="in-mask-morph">Dilate/Erode</label>
+            <input class="wb-input" type="number" min="-12" max="12" id="in-mask-morph" value="${this.segWorkbench.morphologyPx}" style="width:68px" />
           </div>
           <div class="wb-row">
             <label class="mono" for="in-mask-png">Import Mask PNG:</label>
@@ -730,8 +905,9 @@ class FrozenApertureApp {
   renderReconstructionPanel(sb) {
     const jobs = this.project.jobs || [];
     sb.innerHTML = `
+      <h2 class="stage-heading">Reconstruction Providers</h2>
       <div class="wb-section">
-        <h3 class="wb-title">Reconstruction Providers (#6, #7)</h3>
+        <h3 class="wb-title">Available Providers</h3>
         ${this.providerStatuses.map(p => `
           <div class="wb-list-item" style="flex-direction:column;align-items:flex-start;cursor:default;margin-bottom:6px">
             <div style="display:flex;justify-content:space-between;width:100%">
@@ -742,7 +918,7 @@ class FrozenApertureApp {
           </div>
         `).join('')}
         <div class="wb-row">
-          <input class="wb-input" id="in-dex-url" placeholder="http://big-mac.local:8787 (optional)" value="${escapeHtml(this.dexProvider.baseUrl)}" style="flex:1" />
+          <input class="wb-input" id="in-dex-url" aria-label="Local DexDiffusion endpoint URL" placeholder="http://big-mac.local:8787 (optional)" value="${escapeHtml(this.dexProvider.baseUrl)}" style="flex:1" />
           <button class="wb-btn" id="btn-probe-providers">Probe 3D & World</button>
         </div>
       </div>
@@ -750,9 +926,9 @@ class FrozenApertureApp {
       <div class="wb-section">
         <h3 class="wb-title">Manual GLB Import (Offline Ready)</h3>
         <div class="wb-row">
-          <input type="file" id="in-glb-file" accept=".glb,model/gltf-binary" class="wb-input" style="flex:1" />
+          <input type="file" id="in-glb-file" aria-label="Import binary GLB mesh file" accept=".glb,model/gltf-binary" class="wb-input" style="flex:1" />
         </div>
-        <div class="mono">Imported GLBs undergo full binary glTF 2.0 structural, coordinate, bounds, and topology validation before entering the asset registry.</div>
+        <div class="empty-state">Imported GLBs undergo full binary glTF 2.0 structural, coordinate, bounds, and topology validation before entering the asset registry.</div>
       </div>
 
       <div class="wb-section">
@@ -766,18 +942,20 @@ class FrozenApertureApp {
               </div>
               <div class="mono">${escapeHtml(j.message || '')}</div>
             </div>
-          `).join('') || '<div class="mono">No reconstruction jobs run yet.</div>'}
+          `).join('') || '<div class="empty-state">No reconstruction jobs run yet.</div>'}
         </div>
       </div>
     `;
 
-    sb.querySelector('#btn-probe-providers')?.addEventListener('click', async () => {
-      const url = sb.querySelector('#in-dex-url')?.value || '';
-      this.dexProvider.setBaseUrl(url);
-      this.providerStatuses = await this.providers.discoverAll();
-      const worldStatus = await this.dexProvider.probeWorldWorkers();
-      this.renderSidebar();
-      this.notify(`Probed providers (World/SHARP: ${worldStatus.state}).`);
+    sb.querySelector('#btn-probe-providers')?.addEventListener('click', async (e) => {
+      await this.runWithBusyButton(e.currentTarget, 'Probing…', async () => {
+        const url = sb.querySelector('#in-dex-url')?.value || '';
+        this.dexProvider.setBaseUrl(url);
+        this.providerStatuses = await this.providers.discoverAll();
+        const worldStatus = await this.dexProvider.probeWorldWorkers();
+        this.renderSidebar();
+        this.notify(`Probed providers (World/SHARP: ${worldStatus.state}).`);
+      });
     });
 
     sb.querySelector('#in-glb-file')?.addEventListener('change', async (e) => {
@@ -810,6 +988,7 @@ class FrozenApertureApp {
     const validAssets = this.project.assets.filter(a => a.validation?.valid);
 
     sb.innerHTML = `
+      <h2 class="stage-heading">Scene Assembly</h2>
       <div class="wb-section">
         <h3 class="wb-title">Scene Objects (${objs.length})</h3>
         <div class="wb-list">
@@ -824,50 +1003,50 @@ class FrozenApertureApp {
 
       ${sel ? `
         <div class="wb-section">
-          <h3 class="wb-title">Transform & 3D Gizmo (#16) — ${escapeHtml(sel.label)}</h3>
-          <div class="mono" style="margin-bottom:6px">ID: ${escapeHtml(sel.id)} · State: ${escapeHtml(sel.temporalState)}</div>
+          <h3 class="wb-title">Transform & 3D Gizmo — ${escapeHtml(sel.label)}</h3>
+          <div class="mono" style="margin-bottom:8px">ID: ${escapeHtml(sel.id)} · State: ${escapeHtml(sel.temporalState)}</div>
           <div class="wb-row">
-            <select class="wb-select" id="sel-gizmo-mode" style="flex:1">
+            <select class="wb-select" id="sel-gizmo-mode" aria-label="3D Transform Gizmo Mode" style="flex:1">
               <option value="off" ${this.gizmoMode === 'off' ? 'selected' : ''}>Gizmo: Off</option>
               <option value="translate" ${this.gizmoMode === 'translate' ? 'selected' : ''}>Gizmo: Translate</option>
               <option value="rotate" ${this.gizmoMode === 'rotate' ? 'selected' : ''}>Gizmo: Rotate</option>
               <option value="scale" ${this.gizmoMode === 'scale' ? 'selected' : ''}>Gizmo: Scale</option>
             </select>
-            <button class="wb-btn ${this.gizmoSnap ? 'primary' : ''}" id="btn-gizmo-snap">Snap: ${this.gizmoSnap ? 'ON' : 'OFF'}</button>
+            <button class="wb-btn ${this.gizmoSnap ? 'primary' : ''}" id="btn-gizmo-snap" aria-pressed="${this.gizmoSnap}">Snap: ${this.gizmoSnap ? 'ON' : 'OFF'}</button>
           </div>
-          <label class="mono">Position (m)</label>
-          <div class="wb-grid-3" style="margin-bottom:6px">
-            <input class="wb-input" type="number" step="0.1" id="tx" value="${sel.position[0]}" />
-            <input class="wb-input" type="number" step="0.1" id="ty" value="${sel.position[1]}" />
-            <input class="wb-input" type="number" step="0.1" id="tz" value="${sel.position[2]}" />
-          </div>
-          <label class="mono">Scale</label>
+          <div class="mono" style="margin-bottom:4px">Position (m)</div>
           <div class="wb-grid-3" style="margin-bottom:8px">
-            <input class="wb-input" type="number" step="0.1" min="0.1" id="sx" value="${sel.scale[0]}" />
-            <input class="wb-input" type="number" step="0.1" min="0.1" id="sy" value="${sel.scale[1]}" />
-            <input class="wb-input" type="number" step="0.1" min="0.1" id="sz" value="${sel.scale[2]}" />
+            <input class="wb-input" type="number" step="0.1" id="tx" aria-label="Position X in meters" value="${sel.position[0]}" />
+            <input class="wb-input" type="number" step="0.1" id="ty" aria-label="Position Y in meters" value="${sel.position[1]}" />
+            <input class="wb-input" type="number" step="0.1" id="tz" aria-label="Position Z in meters" value="${sel.position[2]}" />
+          </div>
+          <div class="mono" style="margin-bottom:4px">Scale</div>
+          <div class="wb-grid-3" style="margin-bottom:10px">
+            <input class="wb-input" type="number" step="0.1" min="0.1" id="sx" aria-label="Scale X" value="${sel.scale[0]}" />
+            <input class="wb-input" type="number" step="0.1" min="0.1" id="sy" aria-label="Scale Y" value="${sel.scale[1]}" />
+            <input class="wb-input" type="number" step="0.1" min="0.1" id="sz" aria-label="Scale Z" value="${sel.scale[2]}" />
           </div>
           <div class="wb-row">
-            <button class="wb-btn primary" id="btn-apply-xform">Apply</button>
+            <button class="wb-btn primary" id="btn-apply-xform">Apply Transform</button>
             <button class="wb-btn" id="btn-focus-obj">Focus</button>
             <button class="wb-btn" id="btn-isolate-obj">${this.renderer.isolatedObjectId === sel.id ? 'Un-Isolate' : 'Isolate'}</button>
           </div>
         </div>
 
         <div class="wb-section">
-          <h3 class="wb-title">Asset & Multi-Component Slots (#9, #10, #13)</h3>
+          <h3 class="wb-title">Asset & Multi-Component Slots</h3>
           <div class="wb-row">
-            <select class="wb-select" id="sel-bind-asset" style="flex:1">
+            <select class="wb-select" id="sel-bind-asset" aria-label="Select Validated GLB Asset" style="flex:1">
               ${validAssets.map(a => `<option value="${escapeHtml(a.id)}" ${sel.assetId === a.id ? 'selected' : ''}>${escapeHtml(a.label)} [${escapeHtml(a.lifecycleState)}]</option>`).join('')}
             </select>
           </div>
           <div class="wb-row">
             <button class="wb-btn primary" id="btn-bind-asset">Bind Whole GLB</button>
-            <button class="wb-btn" id="btn-revert-asset" ${!sel.assetHistory?.length ? 'disabled' : ''}>Revert</button>
+            <button class="wb-btn" id="btn-revert-asset" ${!sel.assetHistory?.length ? 'disabled' : ''}>Revert Previous</button>
             <button class="wb-btn" id="btn-autofit-col">Auto-Fit Proxy</button>
           </div>
           <div class="wb-row">
-            <select class="wb-select" id="sel-comp-slot">
+            <select class="wb-select" id="sel-comp-slot" aria-label="Select Component Slot">
               <option value="body">Slot: body</option>
               <option value="weapon">Slot: weapon</option>
               <option value="clothing">Slot: clothing</option>
@@ -1018,9 +1197,10 @@ class FrozenApertureApp {
     const sel = this.scene.objects.find(o => o.id === this.selectedObjectId);
 
     sb.innerHTML = `
+      <h2 class="stage-heading">Temporal Simulation</h2>
       <div class="wb-section">
-        <h3 class="wb-title">Temporal Simulation Controls</h3>
-        <div class="mono" style="margin-bottom:8px">
+        <h3 class="wb-title">Simulation Controls</h3>
+        <div class="mono" style="margin-bottom:10px">
           Tick: ${stats.tick} · Active: ${stats.counts.active} · Held: ${stats.counts.held} · Suspended: ${stats.counts.suspended} · Contacts: ${stats.contacts}
         </div>
         <div class="wb-row">
@@ -1043,7 +1223,7 @@ class FrozenApertureApp {
       <div class="wb-section">
         <h3 class="wb-title">Physics & Determinism Diagnostics</h3>
         <div class="wb-row">
-          <button class="wb-btn" id="sim-col-vis">${this.renderer.showCollisionProxies ? 'Hide' : 'Show'} Collision Proxies</button>
+          <button class="wb-btn" id="sim-col-vis" aria-pressed="${this.renderer.showCollisionProxies}">${this.renderer.showCollisionProxies ? 'Hide' : 'Show'} Collision Proxies</button>
           <button class="wb-btn" id="sim-replay-check">Verify Deterministic Replay</button>
         </div>
         <div class="mono" id="sim-hash-out">State Hash: ${this.sim.getStateHash()}</div>
@@ -1080,6 +1260,7 @@ class FrozenApertureApp {
     const cmp = canCompare ? this.assetManager.compareCandidates(this.project, assets[0].id, assets[1].id) : null;
 
     sb.innerHTML = `
+      <h2 class="stage-heading">Validation & QA</h2>
       <div class="wb-section">
         <h3 class="wb-title">Project Schema Validation</h3>
         <div class="wb-row">
@@ -1091,21 +1272,21 @@ class FrozenApertureApp {
       </div>
 
       <div class="wb-section">
-        <h3 class="wb-title">Silhouette IoU Alignment (#4)</h3>
+        <h3 class="wb-title">Silhouette IoU Alignment</h3>
         <div class="wb-row">
           <button class="wb-btn primary" id="btn-eval-iou">Evaluate Selected Silhouette IoU</button>
         </div>
         ${this.lastIouResult ? `
-          <div class="mono" style="margin-bottom:6px">
+          <div class="mono" style="margin-bottom:8px">
             IoU: <strong>${this.lastIouResult.iouPercent}%</strong> · Precision: ${Math.round(this.lastIouResult.precision * 100)}% · Recall: ${Math.round(this.lastIouResult.recall * 100)}%
           </div>
           <img src="${this.lastIouResult.heatmapDataUrl}" alt="Silhouette IoU difference heatmap" style="width:100%;border:1px solid var(--border-subtle);background:#05070c" />
-        ` : '<div class="mono">Green = match · Cyan = 3D outside mask · Magenta = source missing.</div>'}
+        ` : '<div class="empty-state">Green = match · Cyan = 3D outside mask · Magenta = source missing.</div>'}
       </div>
 
       ${cmp ? `
         <div class="wb-section">
-          <h3 class="wb-title">Candidate Comparator (#8)</h3>
+          <h3 class="wb-title">Candidate Comparator</h3>
           <div class="mono">
             <div><strong>Incumbent:</strong> ${escapeHtml(cmp.incumbent.label)} (${cmp.incumbent.vertices}v / ${cmp.incumbent.triangles}t)</div>
             <div><strong>Candidate:</strong> ${escapeHtml(cmp.candidate.label)} (${cmp.candidate.vertices}v / ${cmp.candidate.triangles}t)</div>
@@ -1127,8 +1308,8 @@ class FrozenApertureApp {
                 Verts: ${a.validation?.stats?.vertexCount || 0} · Tris: ${a.validation?.stats?.triangleCount || 0} · Watertight: ${a.validation?.stats?.topology?.watertight ? 'yes' : 'no'}
               </div>
               <div class="mono">SHA-256: ${a.sha256.slice(0, 18)}… · Rights: ${escapeHtml(a.rights)}</div>
-              <div class="wb-row" style="margin-top:4px;margin-bottom:0">
-                <select class="wb-select" data-asset-state="${escapeHtml(a.id)}">
+              <div class="wb-row" style="margin-top:6px;margin-bottom:0;width:100%">
+                <select class="wb-select" aria-label="Lifecycle state for ${escapeHtml(a.label)}" data-asset-state="${escapeHtml(a.id)}" style="flex:1">
                   ${ASSET_LIFECYCLE_STATES.map(st => `<option value="${st}" ${a.lifecycleState === st ? 'selected' : ''}>${st}</option>`).join('')}
                 </select>
               </div>
@@ -1138,7 +1319,7 @@ class FrozenApertureApp {
       </div>
 
       <div class="wb-section">
-        <h3 class="wb-title">Renderer Telemetry (#19, #24)</h3>
+        <h3 class="wb-title">Renderer Telemetry</h3>
         <div class="mono">
           Draw Calls: ${tel.drawCalls} · Triangles: ${tel.triangles}<br/>
           Objects: ${tel.objectCount} (Instanced: ${tel.instancedCount})<br/>
@@ -1183,13 +1364,22 @@ class FrozenApertureApp {
   }
 
   async renderExportPanel(sb, renderToken = this.sidebarRenderToken) {
-    const saved = await this.store.listSavedAsync();
+    const [saved, quota] = await Promise.all([
+      this.store.listSavedAsync(),
+      this.store.getStorageEstimate(),
+    ]);
     if (renderToken !== this.sidebarRenderToken || this.activeStage !== 'export') return;
+    const quotaText = quota
+      ? `${(quota.usageBytes / (1024 * 1024)).toFixed(2)} MB / ${(quota.quotaBytes / (1024 * 1024)).toFixed(0)} MB used`
+      : 'Browser storage estimate unavailable';
+
     sb.innerHTML = `
+      <h2 class="stage-heading">Save & Export</h2>
       <div class="wb-section">
-        <h3 class="wb-title">Project Persistence — IndexedDB & Bundles (#21, #22)</h3>
+        <h3 class="wb-title">Project Persistence — IndexedDB & Bundles</h3>
         <div class="mono" style="margin-bottom:8px">
-          Project: ${escapeHtml(this.project.project.name)} (rev ${this.project.project.revision})
+          Project: ${escapeHtml(this.project.project.name)} (rev ${this.project.project.revision})<br/>
+          Storage: ${escapeHtml(quotaText)}
         </div>
         <div class="wb-row">
           <button class="wb-btn primary" id="btn-save-proj">Save (IndexedDB)</button>
@@ -1218,39 +1408,45 @@ class FrozenApertureApp {
         <h3 class="wb-title">Saved Browser Projects (${saved.length})</h3>
         <div class="wb-list">
           ${saved.map(item => `
-            <button class="wb-list-item" data-load-proj="${escapeHtml(item.id)}">
-              <span>${escapeHtml(item.name)} (rev ${item.revision})</span>
-              <span class="badge">Open</span>
-            </button>
-          `).join('') || '<div class="mono">No browser-saved projects yet.</div>'}
+            <div class="wb-list-item" style="cursor:default">
+              <button class="wb-btn" data-load-proj="${escapeHtml(item.id)}" style="flex:1;text-align:left;border:none;background:transparent;padding:0">
+                ${escapeHtml(item.name)} (rev ${item.revision})
+              </button>
+              <button class="wb-btn danger" data-del-proj="${escapeHtml(item.id)}" aria-label="Delete saved project ${escapeHtml(item.name)}">Delete</button>
+            </div>
+          `).join('') || '<div class="empty-state">No browser-saved projects yet. Click Save (IndexedDB) above to store a revision.</div>'}
         </div>
       </div>
     `;
 
-    sb.querySelector('#btn-save-proj')?.addEventListener('click', async () => {
-      try {
-        const res = await this.store.saveProjectAsync(this.project, this.assetManager);
-        this.notify(res.message);
-        this.renderSidebar();
-      } catch (err) {
-        this.notify(err.message, 'error');
-      }
+    sb.querySelector('#btn-save-proj')?.addEventListener('click', async (e) => {
+      await this.runWithBusyButton(e.currentTarget, 'Saving…', async () => {
+        try {
+          const res = await this.store.saveProjectAsync(this.project, this.assetManager);
+          this.notify(res.message);
+          this.renderSidebar();
+        } catch (err) {
+          this.notify(err.message, 'error');
+        }
+      });
     });
 
-    sb.querySelector('#btn-export-zip')?.addEventListener('click', async () => {
-      try {
-        const zipBytes = await exportProjectZipBundleCompressed(this.project, this.assetManager);
-        const blob = new Blob([zipBytes], { type: 'application/zip' });
-        const url = URL.createObjectURL(blob);
-        const a = document.createElement('a');
-        a.href = url;
-        a.download = sanitizeFilename(`${this.project.project.id}_rev${this.project.project.revision}.fap.zip`);
-        a.click();
-        URL.revokeObjectURL(url);
-        this.notify(`Exported DEFLATE-compressed .fap.zip bundle (${(zipBytes.byteLength / 1024).toFixed(1)} KB).`);
-      } catch (err) {
-        this.notify(err.message, 'error');
-      }
+    sb.querySelector('#btn-export-zip')?.addEventListener('click', async (e) => {
+      await this.runWithBusyButton(e.currentTarget, 'Compressing…', async () => {
+        try {
+          const zipBytes = await exportProjectZipBundleCompressed(this.project, this.assetManager);
+          const blob = new Blob([zipBytes], { type: 'application/zip' });
+          const url = URL.createObjectURL(blob);
+          const a = document.createElement('a');
+          a.href = url;
+          a.download = sanitizeFilename(`${this.project.project.id}_rev${this.project.project.revision}.fap.zip`);
+          a.click();
+          URL.revokeObjectURL(url);
+          this.notify(`Exported DEFLATE-compressed .fap.zip bundle (${(zipBytes.byteLength / 1024).toFixed(1)} KB).`);
+        } catch (err) {
+          this.notify(err.message, 'error');
+        }
+      });
     });
 
     sb.querySelector('#in-import-zip')?.addEventListener('change', async (e) => {
@@ -1323,6 +1519,18 @@ class FrozenApertureApp {
           await this.bindActiveScene();
           this.renderSidebar();
           this.notify(`Loaded ${project.project.name}.`);
+        } catch (err) {
+          this.notify(err.message, 'error');
+        }
+      });
+    });
+
+    sb.querySelectorAll('[data-del-proj]').forEach(btn => {
+      btn.addEventListener('click', async () => {
+        try {
+          await this.store.deleteProjectAsync(btn.dataset.delProj);
+          this.notify('Deleted saved browser project.');
+          this.renderSidebar();
         } catch (err) {
           this.notify(err.message, 'error');
         }

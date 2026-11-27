@@ -90,6 +90,28 @@ export class ProjectStore {
     return Array.from(byId.values()).sort((a, b) => String(b.modifiedAt || '').localeCompare(String(a.modifiedAt || '')));
   }
 
+  async deleteProjectAsync(projectId) {
+    await this.idb.deleteProject(projectId);
+    if (this.storage) {
+      try {
+        this.storage.removeItem(STORAGE_PREFIX + projectId);
+        const idx = this.listSaved().filter(item => item.id !== projectId);
+        this.storage.setItem(INDEX_KEY, JSON.stringify(idx));
+      } catch (_) {}
+    }
+    return true;
+  }
+
+  async getStorageEstimate() {
+    if (typeof globalThis.navigator !== 'undefined' && globalThis.navigator.storage?.estimate) {
+      try {
+        const est = await globalThis.navigator.storage.estimate();
+        return { usageBytes: est.usage || 0, quotaBytes: est.quota || 0 };
+      } catch (_) {}
+    }
+    return null;
+  }
+
   hasPersistentBrowserStorage() {
     return Boolean(this.storage);
   }

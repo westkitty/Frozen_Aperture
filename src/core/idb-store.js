@@ -151,4 +151,16 @@ export class IndexedDbAssetStore {
       req.onerror = () => resolve([]);
     });
   }
+
+  async deleteProject(id) {
+    this.memoryProjects.delete(id);
+    const db = await this.open();
+    if (!db) return true;
+    return new Promise((resolve) => {
+      const tx = db.transaction(STORE_PROJECTS, 'readwrite');
+      tx.objectStore(STORE_PROJECTS).delete(id);
+      tx.oncomplete = () => resolve(true);
+      tx.onerror = () => resolve(false);
+    });
+  }
 }

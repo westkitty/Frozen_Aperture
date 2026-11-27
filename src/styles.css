@@ -4,14 +4,16 @@
   --bg-elevated: #111827;
   --border-subtle: #1e293b;
   --border-focus: #38bdf8;
-  --text-primary: #f1f5f9;
-  --text-secondary: #94a3b8;
-  --text-muted: #64748b;
+  --text-primary: #f1f5f9;   /* 17.4:1 on #0b101b */
+  --text-secondary: #a8b7cc; /* 9.2:1 on #0b101b */
+  --text-muted: #8295b0;     /* 5.9:1 on #0b101b — passes WCAG AA */
   --accent: #38bdf8;
   --accent-dim: rgba(56, 189, 248, 0.14);
   --ok: #10b981;
   --warn: #f59e0b;
   --err: #f43f5e;
+  --ease-out-expo: cubic-bezier(0.16, 1, 0.3, 1);
+  --shadow-elevated: 0 12px 32px rgba(0, 0, 0, 0.55), 0 2px 6px rgba(0, 0, 0, 0.4);
   --font-sans: 'Inter', system-ui, -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
   --font-mono: 'JetBrains Mono', ui-monospace, SFMono-Regular, Menlo, monospace;
 }
@@ -30,12 +32,13 @@ html, body {
   color: var(--text-primary);
   font-family: var(--font-sans);
   font-size: 13px;
+  line-height: 1.45;
   -webkit-font-smoothing: antialiased;
 }
 
 button, input, select {
   font-family: inherit;
-  font-size: 12px;
+  font-size: 13px;
   color: var(--text-primary);
 }
 
@@ -52,7 +55,6 @@ button:focus-visible, input:focus-visible, select:focus-visible {
   flex-direction: column;
 }
 
-/* Main Viewport Stage */
 #stage-shell {
   position: relative;
   flex: 1;
@@ -99,16 +101,17 @@ button:focus-visible, input:focus-visible, select:focus-visible {
   top: 14px;
   left: 50%;
   transform: translateX(-50%);
-  background: rgba(5, 7, 12, 0.86);
-  border: 1px solid var(--border-subtle);
-  padding: 4px 10px;
-  font-size: 11px;
-  letter-spacing: 0.06em;
-  text-transform: uppercase;
+  background: var(--bg-panel);
+  border: 1px solid rgba(255, 255, 255, 0.1);
+  box-shadow: var(--shadow-elevated);
+  padding: 6px 12px;
+  border-radius: 4px;
+  font-size: 12px;
+  font-weight: 500;
   color: var(--accent);
 }
 
-/* Immersive Play Mode — Minimalist Unobtrusive Controls (NO permanent HUD) */
+/* Immersive Play Mode — Minimalist Progressive-Disclosure Bar ([ST-01], [HI-01], [QW-01]) */
 #play-bar {
   position: absolute;
   bottom: 18px;
@@ -118,17 +121,16 @@ button:focus-visible, input:focus-visible, select:focus-visible {
   display: flex;
   align-items: center;
   gap: 6px;
-  padding: 6px 10px;
-  background: rgba(7, 10, 18, 0.72);
-  border: 1px solid rgba(148, 163, 184, 0.18);
-  border-radius: 4px;
-  backdrop-filter: blur(8px);
+  padding: 6px 8px;
+  background: var(--bg-panel);
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  border-radius: 6px;
+  box-shadow: var(--shadow-elevated);
   max-width: calc(100vw - 24px);
-  flex-wrap: wrap;
-  justify-content: center;
 }
 
-#app.workbench-open #play-bar {
+#app.workbench-open #play-bar,
+#app.workbench-open #play-options-popover {
   display: none;
 }
 
@@ -136,56 +138,118 @@ button:focus-visible, input:focus-visible, select:focus-visible {
   background: transparent;
   border: 1px solid transparent;
   color: var(--text-secondary);
-  padding: 5px 9px;
-  border-radius: 3px;
+  padding: 0 12px;
+  border-radius: 4px;
   cursor: pointer;
-  transition: color 0.15s, border-color 0.15s, background 0.15s;
-  min-height: 30px;
+  min-height: 44px;
+  min-width: 44px;
+  white-space: nowrap;
+  transition: color 180ms var(--ease-out-expo),
+              border-color 180ms var(--ease-out-expo),
+              background-color 180ms var(--ease-out-expo),
+              transform 160ms var(--ease-out-expo);
 }
 
-.play-btn:hover, .play-btn.active {
+.play-btn:hover:not(:disabled),
+.play-btn.active {
   color: var(--text-primary);
   border-color: rgba(56, 189, 248, 0.45);
   background: rgba(56, 189, 248, 0.1);
 }
 
+.play-btn:active:not(:disabled) {
+  transform: translateY(1px);
+}
+
 .play-btn.primary {
-  color: var(--accent);
-  border-color: rgba(56, 189, 248, 0.35);
+  color: #e0f2fe;
+  background: rgba(56, 189, 248, 0.16);
+  border-color: rgba(56, 189, 248, 0.45);
+}
+
+.play-btn:disabled {
+  opacity: 0.42;
+  cursor: not-allowed;
+  pointer-events: none;
 }
 
 .play-sep {
   width: 1px;
-  height: 16px;
+  height: 20px;
   background: var(--border-subtle);
   margin: 0 2px;
+  flex-shrink: 0;
 }
 
 .play-select {
-  background: rgba(15, 23, 42, 0.9);
+  background: #070b14;
   border: 1px solid var(--border-subtle);
   color: var(--text-primary);
-  padding: 4px 6px;
-  border-radius: 3px;
-  min-height: 30px;
+  padding: 0 10px;
+  border-radius: 4px;
+  min-height: 44px;
+  width: 100%;
 }
 
-/* Minimal transient toast */
+/* Anchored Options Popover for Secondary Play Controls ([ST-01]) */
+#play-options-popover {
+  position: absolute;
+  bottom: 76px;
+  left: 50%;
+  transform: translateX(-50%);
+  z-index: 25;
+  width: min(360px, calc(100vw - 24px));
+  background: var(--bg-panel);
+  border: 1px solid rgba(255, 255, 255, 0.1);
+  border-radius: 8px;
+  box-shadow: var(--shadow-elevated);
+  padding: 14px;
+  display: none;
+  flex-direction: column;
+  gap: 10px;
+}
+
+#play-options-popover.open {
+  display: flex;
+}
+
+.popover-row {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.popover-row-inline {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
+.popover-label {
+  font-size: 12px;
+  color: var(--text-secondary);
+  font-weight: 500;
+}
+
+/* Transient Toast */
 #toast {
   position: absolute;
   top: 14px;
   right: 16px;
   z-index: 40;
-  background: rgba(11, 16, 27, 0.94);
-  border: 1px solid var(--border-subtle);
+  background: var(--bg-panel);
+  border: 1px solid rgba(255, 255, 255, 0.08);
   border-left: 3px solid var(--accent);
-  padding: 8px 12px;
+  box-shadow: var(--shadow-elevated);
+  padding: 10px 14px;
+  border-radius: 4px;
   font-size: 12px;
   color: var(--text-primary);
-  max-width: 380px;
+  max-width: min(380px, calc(100vw - 32px));
   opacity: 0;
   pointer-events: none;
-  transition: opacity 0.2s;
+  transition: opacity 200ms var(--ease-out-expo);
 }
 
 #toast.visible {
@@ -200,13 +264,79 @@ button:focus-visible, input:focus-visible, select:focus-visible {
   border-left-color: var(--warn);
 }
 
+/* Command Palette ([ST-02]) */
+#cmd-palette-backdrop {
+  position: fixed;
+  inset: 0;
+  z-index: 60;
+  background: rgba(5, 7, 12, 0.68);
+  display: none;
+  align-items: flex-start;
+  justify-content: center;
+  padding-top: 12vh;
+}
+
+#cmd-palette-backdrop.open {
+  display: flex;
+}
+
+#cmd-palette {
+  width: min(480px, calc(100vw - 24px));
+  background: var(--bg-panel);
+  border: 1px solid rgba(255, 255, 255, 0.12);
+  border-radius: 8px;
+  box-shadow: var(--shadow-elevated);
+  overflow: hidden;
+  display: flex;
+  flex-direction: column;
+}
+
+#cmd-input {
+  width: 100%;
+  background: #070b14;
+  border: none;
+  border-bottom: 1px solid var(--border-subtle);
+  padding: 14px 16px;
+  font-size: 14px;
+  color: var(--text-primary);
+}
+
+#cmd-list {
+  max-height: 300px;
+  overflow-y: auto;
+  padding: 6px;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.cmd-item {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  width: 100%;
+  min-height: 44px;
+  padding: 8px 12px;
+  background: transparent;
+  border: 1px solid transparent;
+  border-radius: 4px;
+  cursor: pointer;
+  text-align: left;
+  color: var(--text-primary);
+}
+
+.cmd-item:hover, .cmd-item:focus-visible {
+  background: var(--accent-dim);
+  border-color: rgba(56, 189, 248, 0.35);
+}
+
 /* Authoring Workbench Layout */
 #workbench-topbar {
   display: none;
-  height: 44px;
+  min-height: 54px;
   background: var(--bg-panel);
   border-bottom: 1px solid var(--border-subtle);
-  padding: 0 12px;
+  padding: 4px 12px;
   align-items: center;
   justify-content: space-between;
   gap: 12px;
@@ -222,9 +352,9 @@ button:focus-visible, input:focus-visible, select:focus-visible {
   align-items: center;
   gap: 8px;
   font-weight: 600;
-  letter-spacing: 0.08em;
-  text-transform: uppercase;
-  font-size: 12px;
+  letter-spacing: -0.01em;
+  font-size: 14px;
+  margin: 0;
   white-space: nowrap;
 }
 
@@ -233,47 +363,50 @@ button:focus-visible, input:focus-visible, select:focus-visible {
   height: 8px;
   background: var(--accent);
   border-radius: 50%;
+  flex-shrink: 0;
 }
 
 .stage-tabs {
   display: flex;
   align-items: center;
-  gap: 3px;
+  gap: 4px;
 }
 
 .stage-tab {
   background: transparent;
   border: 1px solid transparent;
   color: var(--text-secondary);
-  padding: 6px 10px;
+  padding: 0 12px;
+  min-height: 44px;
   cursor: pointer;
-  letter-spacing: 0.06em;
-  font-size: 11px;
-  font-weight: 600;
-  text-transform: uppercase;
-  border-radius: 3px;
+  font-size: 13px;
+  font-weight: 500;
+  border-radius: 4px;
   white-space: nowrap;
+  transition: color 180ms var(--ease-out-expo),
+              background-color 180ms var(--ease-out-expo),
+              border-color 180ms var(--ease-out-expo);
 }
 
 .stage-tab:hover {
   color: var(--text-primary);
-  background: rgba(255, 255, 255, 0.04);
+  background: rgba(255, 255, 255, 0.05);
 }
 
 .stage-tab.active {
-  color: var(--accent);
+  color: #e0f2fe;
   background: var(--accent-dim);
-  border-color: rgba(56, 189, 248, 0.35);
+  border-color: rgba(56, 189, 248, 0.38);
 }
 
 #workbench-sidebar {
   display: none;
-  width: 390px;
+  width: 400px;
   max-width: 100vw;
   background: var(--bg-panel);
   border-left: 1px solid var(--border-subtle);
   overflow-y: auto;
-  padding: 14px;
+  padding: 16px;
   flex-shrink: 0;
 }
 
@@ -281,30 +414,41 @@ button:focus-visible, input:focus-visible, select:focus-visible {
   display: block;
 }
 
+.stage-heading {
+  font-size: 16px;
+  font-weight: 600;
+  letter-spacing: -0.015em;
+  color: var(--text-primary);
+  margin: 0 0 14px 0;
+  padding-bottom: 10px;
+  border-bottom: 1px solid var(--border-subtle);
+}
+
 .wb-section {
-  margin-bottom: 16px;
-  padding-bottom: 14px;
+  margin-bottom: 22px;
+  padding-top: 4px;
+  padding-bottom: 18px;
   border-bottom: 1px solid var(--border-subtle);
 }
 
 .wb-section:last-child {
   border-bottom: none;
+  margin-bottom: 0;
 }
 
 .wb-title {
-  font-size: 11px;
-  font-weight: 700;
-  letter-spacing: 0.08em;
-  text-transform: uppercase;
-  color: var(--text-secondary);
-  margin: 0 0 8px 0;
+  font-size: 13px;
+  font-weight: 600;
+  letter-spacing: -0.01em;
+  color: var(--text-primary);
+  margin: 4px 0 10px 0;
 }
 
 .wb-row {
   display: flex;
-  gap: 6px;
+  gap: 8px;
   align-items: center;
-  margin-bottom: 8px;
+  margin-bottom: 10px;
   flex-wrap: wrap;
 }
 
@@ -312,14 +456,24 @@ button:focus-visible, input:focus-visible, select:focus-visible {
   background: var(--bg-elevated);
   border: 1px solid var(--border-subtle);
   color: var(--text-primary);
-  padding: 6px 10px;
-  border-radius: 3px;
+  padding: 0 12px;
+  border-radius: 4px;
   cursor: pointer;
-  min-height: 30px;
+  min-height: 44px;
+  min-width: 44px;
+  transition: color 180ms var(--ease-out-expo),
+              background-color 180ms var(--ease-out-expo),
+              border-color 180ms var(--ease-out-expo),
+              transform 160ms var(--ease-out-expo);
 }
 
-.wb-btn:hover {
+.wb-btn:hover:not(:disabled) {
   border-color: var(--accent);
+  background: #172033;
+}
+
+.wb-btn:active:not(:disabled) {
+  transform: translateY(1px);
 }
 
 .wb-btn.primary {
@@ -333,13 +487,20 @@ button:focus-visible, input:focus-visible, select:focus-visible {
   color: #fda4af;
 }
 
+.wb-btn:disabled,
+.wb-select:disabled {
+  opacity: 0.42;
+  cursor: not-allowed;
+  pointer-events: none;
+}
+
 .wb-input, .wb-select {
   background: #070b14;
   border: 1px solid var(--border-subtle);
   color: var(--text-primary);
-  padding: 5px 8px;
-  border-radius: 3px;
-  min-height: 30px;
+  padding: 8px 10px;
+  border-radius: 4px;
+  min-height: 44px;
   min-width: 0;
   max-width: 100%;
 }
@@ -357,8 +518,8 @@ button:focus-visible, input:focus-visible, select:focus-visible {
 .wb-list {
   display: flex;
   flex-direction: column;
-  gap: 4px;
-  max-height: 220px;
+  gap: 6px;
+  max-height: 240px;
   overflow-y: auto;
 }
 
@@ -366,13 +527,19 @@ button:focus-visible, input:focus-visible, select:focus-visible {
   display: flex;
   justify-content: space-between;
   align-items: center;
-  gap: 6px;
-  padding: 6px 8px;
+  gap: 8px;
+  min-height: 44px;
+  padding: 8px 10px;
   background: #070b14;
   border: 1px solid var(--border-subtle);
-  border-radius: 3px;
+  border-radius: 4px;
   cursor: pointer;
   text-align: left;
+  transition: border-color 180ms var(--ease-out-expo), background-color 180ms var(--ease-out-expo);
+}
+
+.wb-list-item:hover {
+  border-color: rgba(56, 189, 248, 0.45);
 }
 
 .wb-list-item.selected {
@@ -382,9 +549,10 @@ button:focus-visible, input:focus-visible, select:focus-visible {
 
 .badge {
   font-family: var(--font-mono);
-  font-size: 10px;
-  padding: 2px 5px;
-  border-radius: 2px;
+  font-variant-numeric: tabular-nums;
+  font-size: 11px;
+  padding: 2px 6px;
+  border-radius: 3px;
   background: #1e293b;
   color: var(--text-secondary);
   white-space: nowrap;
@@ -397,20 +565,33 @@ button:focus-visible, input:focus-visible, select:focus-visible {
 
 .mono {
   font-family: var(--font-mono);
+  font-variant-numeric: tabular-nums;
   font-size: 11px;
   color: var(--text-secondary);
-  word-break: break-all;
+  word-break: break-word;
+  line-height: 1.5;
+}
+
+.empty-state {
+  font-family: var(--font-sans);
+  font-size: 12px;
+  color: var(--text-muted);
+  padding: 12px;
+  background: rgba(255, 255, 255, 0.02);
+  border-radius: 4px;
+  line-height: 1.5;
 }
 
 .notice {
-  background: rgba(56, 189, 248, 0.08);
-  border: 1px solid rgba(56, 189, 248, 0.25);
-  padding: 8px 10px;
-  border-radius: 3px;
-  font-size: 11px;
+  background: rgba(255, 255, 255, 0.03);
+  border: none;
+  border-left: 2px solid var(--accent);
+  padding: 10px 12px;
+  border-radius: 0 4px 4px 0;
+  font-size: 12px;
   color: var(--text-secondary);
-  line-height: 1.45;
-  margin-bottom: 10px;
+  line-height: 1.5;
+  margin-bottom: 12px;
 }
 
 /* 2D Segmentation Overlay Panel inside Viewport */
@@ -455,18 +636,26 @@ button:focus-visible, input:focus-visible, select:focus-visible {
   }
   #workbench-sidebar {
     width: 100%;
-    height: 46vh;
+    height: 48vh;
     border-left: none;
     border-top: 1px solid var(--border-subtle);
   }
   #play-bar {
-    flex-wrap: nowrap;
-    overflow-x: auto;
-    justify-content: flex-start;
-    max-width: calc(100vw - 16px);
     bottom: 12px;
+    gap: 4px;
+    padding: 4px 6px;
   }
-  #play-bar > * {
-    flex-shrink: 0;
+  .play-btn {
+    padding: 0 10px;
+    font-size: 12px;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  *, *::before, *::after {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+    scroll-behavior: auto !important;
   }
 }

@@ -833,9 +833,10 @@ export class SceneRenderer {
           if (instRef.lastVisualKey !== visualKey) {
             instRef.lastVisualKey = visualKey;
             if (!this._tmpColor) this._tmpColor = new THREE.Color();
+            if (!this._highlightColor) this._highlightColor = new THREE.Color(0x7dd3fc);
             this._tmpColor.set(instRef.baseColor);
             if (this.selectedObjectId === obj.id) {
-              this._tmpColor.lerp(new THREE.Color(0x7dd3fc), 0.45);
+              this._tmpColor.lerp(this._highlightColor, 0.45);
             } else if (isActive) {
               this._tmpColor.multiplyScalar(1.32);
             } else {
@@ -968,6 +969,27 @@ export class SceneRenderer {
       idleFramesSkipped: this.idleFramesSkipped,
       framesRendered: this.framesRendered,
     };
+  }
+
+  setBackgroundPlate(dataUrl) {
+    if (this.bgBackdropMesh) {
+      this.threeScene.remove(this.bgBackdropMesh);
+      this.bgBackdropMesh.geometry.dispose();
+      this.bgBackdropMesh.material.dispose();
+      this.bgBackdropMesh = null;
+    }
+    if (!dataUrl) {
+      this.markDirty();
+      return;
+    }
+    const tex = new THREE.TextureLoader().load(dataUrl, () => this.markDirty());
+    tex.colorSpace = THREE.SRGBColorSpace;
+    const geo = new THREE.PlaneGeometry(22, 13.75);
+    const mat = new THREE.MeshBasicMaterial({ map: tex, side: THREE.DoubleSide, depthWrite: false });
+    this.bgBackdropMesh = new THREE.Mesh(geo, mat);
+    this.bgBackdropMesh.position.set(0, 4.2, -9.5);
+    this.threeScene.add(this.bgBackdropMesh);
+    this.markDirty();
   }
 
   dispose() {
