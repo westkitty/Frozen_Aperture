@@ -680,9 +680,10 @@ class FrozenApertureApp {
     else if (this.activeStage === 'export') this.renderExportPanel(sb, token);
   }
 
-  async applyIngestedIllustration(meta) {
-    this.notify(`Analyzing & compiling "${meta.name}" (${meta.width}×${meta.height}) into playable 3D frozen-time objects…`);
-    const compiled = await compileIllustrationToPlayableScene(this.project, meta);
+  async applyIngestedIllustration(meta, { sensitivity = this.parseSensitivity || 'balanced' } = {}) {
+    this.parseSensitivity = sensitivity;
+    this.notify(`Analyzing & compiling "${meta.name}" (${meta.width}×${meta.height}, ${sensitivity}) into playable 3D characters…`);
+    const compiled = await compileIllustrationToPlayableScene(this.project, meta, { sensitivity });
     this.bgBackdropVisible = true;
     this.referenceOverlayOpacity = 0;
     await this.bindActiveScene();
@@ -690,19 +691,20 @@ class FrozenApertureApp {
       this.segWorkbench.setImage(meta, this.project.sourceObjects);
     }
     this.renderSidebar();
-    this.notify(`Compiled "${meta.name}" into ${compiled.objectCount} playable objects! Click any object in your image to release or suspend time.`);
+    this.notify(`Parsed "${meta.name}" into ${compiled.objectCount} playable characters/objects! Click any object to release or suspend time.`);
     return compiled;
   }
 
   renderSourcePanel(sb) {
     const src = this.project.project.sourceIllustration;
     const bgPlate = this.scene.environment?.backgroundRepresentation;
+    const sens = this.parseSensitivity || 'balanced';
     sb.innerHTML = `
       <h2 class="stage-heading">Source & Calibration</h2>
       <div class="wb-section">
         <h3 class="wb-title">Source Illustration</h3>
         <div class="notice">
-          Upload <strong>any image</strong> (PNG, JPEG, WebP, GIF) below — or <strong>drag & drop an image anywhere onto the window</strong>. Frozen Aperture automatically decomposes foreground objects into clickable, physics-enabled 3D frozen-time layers over a clean inpainted background.
+          Upload <strong>any image</strong> (PNG, JPEG, WebP, GIF) below — or <strong>drag & drop an image anywhere onto the window</strong>. Frozen Aperture runs CIELAB per-row background modeling, GrabCut refinement, and silhouette-valley character splitting offline in your browser.
         </div>
         <div class="wb-row">
           <input type="file" id="in-source-file" aria-label="Import source illustration file" accept="image/*" class="wb-input" style="flex:1" />
@@ -718,7 +720,16 @@ class FrozenApertureApp {
             <div>File: ${escapeHtml(src.name)}</div>
             <div>Dims: ${src.width} × ${src.height} (${src.mimeType})</div>
             <div>SHA-256: ${src.sha256.slice(0, 24)}…</div>
-            <div>Extracted Playable Objects: ${this.scene.objects.length}</div>
+            <div>Extracted Characters / Objects: ${this.scene.objects.length}</div>
+          </div>
+          <div class="wb-row">
+            <label for="sel-parse-sens" class="mono">Parse:</label>
+            <select class="wb-select" id="sel-parse-sens" aria-label="Character parser sensitivity" style="flex:1">
+              <option value="tight" ${sens === 'tight' ? 'selected' : ''}>Tight (High Contrast)</option>
+              <option value="balanced" ${sens === 'balanced' ? 'selected' : ''}>Balanced (Default)</option>
+              <option value="broad" ${sens === 'broad' ? 'selected' : ''}>Broad (Subtle / Dark)</option>
+            </select>
+            <button class="wb-btn" id="btn-reparse-image">Re-Parse</button>
           </div>
           <div class="wb-row">
             <button class="wb-btn primary" id="btn-goto-objects">Refine Masks →</button>
@@ -756,6 +767,14 @@ class FrozenApertureApp {
 
     sb.querySelector('#btn-choose-source')?.addEventListener('click', () => {
       sb.querySelector('#in-source-file')?.click();
+    });
+
+    sb.querySelector('#btn-reparse-image')?.addEventListener('click', async (e) => {
+      if (!src) return;
+      const nextSens = sb.querySelector('#sel-parse-sens')?.value || 'balanced';
+      await this.runWithBusyButton(e.currentTarget, 'Parsing…', async () => {
+        await this.applyIngestedIllustration(src, { sensitivity: nextSens });
+      });
     });
 
     sb.querySelector('#btn-goto-objects')?.addEventListener('click', () => {

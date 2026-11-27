@@ -182,9 +182,9 @@ export async function inpaintBackgroundBufferAsync(rgba, width, height, holeMask
 
 /**
  * Browser helper: generates a clean disoccluded background plate Data URL from a source illustration
- * and all extracted sourceObjects using off-thread Web Worker inpainting.
+ * and all extracted sourceObjects (or an exact combined foreground mask) using off-thread Web Worker inpainting.
  */
-export async function generateBackgroundPlateFromSource(sourceMeta, sourceObjects, maxDim = 480) {
+export async function generateBackgroundPlateFromSource(sourceMeta, sourceObjects, maxDim = 480, exactMask = null) {
   if (!sourceMeta?.dataUrl) throw new Error('No source illustration loaded.');
   const img = await new Promise((resolve, reject) => {
     const im = new Image();
@@ -205,14 +205,41 @@ export async function generateBackgroundPlateFromSource(sourceMeta, sourceObject
   const imgData = ctx.getImageData(0, 0, w, h);
 
   const combinedMask = new Uint8Array(w * h);
-  for (const so of sourceObjects || []) {
-    const m = rasterizeSourceObjectMask(so, img.naturalWidth, img.naturalHeight, w, h);
-    for (let i = 0; i < m.length; i++) {
-      if (m[i]) combinedMask[i] = 1;
+  if (exactMask && exactMask.data && exactMask.width && exactMask.height) {
+    // Resample exact foreground mask + 3px dilation so zero character fringes remain on the plate
+    const mw = exactMask.width;
+    const mh = exactMask.height;
+    const raw = new Uint8Array(w * h);
+    for (let y = 0; y < h; y++) {
+      const sy = Math.min(mh - 1, Math.floor((y / h) * mh));
+      for (let x = 0; x < w; x++) {
+        const sx = Math.min(mw - 1, Math.floor((x / w) * mw));
+        if (exactMask.data[sy * mw + sx]) raw[y * w + x] = 1;
+      }
+    }
+    const dilR = 3;
+    for (let y = 0; y < h; y++) {
+      for (let x = 0; x < w; x++) {
+        if (!raw[y * w + x]) continue;
+        const y0 = Math.max(0, y - dilR), y1 = Math.min(h - 1, y + dilR);
+        const x0 = Math.max(0, x - dilR), x1 = Math.min(w - 1, x + dilR);
+        for (let dy = y0; dy <= y1; dy++) {
+          for (let dx = x0; dx <= x1; dx++) combinedMask[dy * w + dx] = 1;
+        }
+      }
+    }
+  } else {
+    for (const so of sourceObjects || []) {
+      const m = rasterizeSourceObjectMask(so, img.naturalWidth, img.naturalHeight, w, h);
+      for (let i = 0; i < m.length; i++) {
+        if (m[i]) combinedMask[i] = 1;
+      }
     }
   }
 
-  const res = await inpaintBackgroundBufferAsync(imgData.data, w, h, combinedMask, { iterations: 24 });
+  // Run enough iterations to guarantee 100% fill even for large characters (stops early once filled === 0)
+  const maxIter = Math.max(64, Math.ceil(Math.max(w, h) * 0.55));
+  const res = await inpaintBackgroundBufferAsync(imgData.data, w, h, combinedMask, { iterations: maxIter });
   const outImg = ctx.createImageData(w, h);
   outImg.data.set(res.rgba);
   ctx.putImageData(outImg, 0, 0);

@@ -587,15 +587,21 @@ async function run() {
     assert.ok(am2.getBytes(restored.project, restored.project.assets[0].id));
   });
 
-  await test('24. Auto-decomposer extracts distinct foreground objects from any image and falls back cleanly on uniform images', async () => {
+  await test('24. Auto-decomposer extracts individual characters on sky-to-floor gradients, splits touching characters, and falls back cleanly', async () => {
     const { detectForegroundRegions } = await import('../src/source/auto-decomposer.js');
-    const w = 120, h = 80;
+    const w = 180, h = 100;
     const rgba = new Uint8ClampedArray(w * h * 4);
-    // Dark background
-    for (let i = 0; i < w * h; i++) {
-      rgba[i * 4] = 12; rgba[i * 4 + 1] = 18; rgba[i * 4 + 2] = 30; rgba[i * 4 + 3] = 255;
+    // Realistic vertical sky -> horizon -> floor gradient background
+    for (let y = 0; y < h; y++) {
+      const t = y / (h - 1);
+      const bgR = Math.round(18 + t * 55);
+      const bgG = Math.round(28 + t * 48);
+      const bgB = Math.round(62 + t * 35);
+      for (let x = 0; x < w; x++) {
+        const idx = (y * w + x) * 4;
+        rgba[idx] = bgR; rgba[idx + 1] = bgG; rgba[idx + 2] = bgB; rgba[idx + 3] = 255;
+      }
     }
-    // Paint 3 bright distinct foreground objects
     const paintRect = (x0, y0, rw, rh, r, g, b) => {
       for (let y = y0; y < y0 + rh; y++) {
         for (let x = x0; x < x0 + rw; x++) {
@@ -604,12 +610,16 @@ async function run() {
         }
       }
     };
-    paintRect(14, 18, 22, 40, 240, 80, 70);
-    paintRect(50, 14, 20, 46, 60, 220, 160);
-    paintRect(86, 22, 22, 36, 90, 170, 250);
+    // 2 separate characters + 2 characters connected by a thin waist/arm bridge
+    paintRect(16, 20, 22, 56, 235, 78, 72);
+    paintRect(62, 18, 22, 58, 52, 218, 155);
+    // Bridge between char 2 and char 3 (thin horizontal band)
+    paintRect(84, 52, 14, 10, 80, 200, 175);
+    paintRect(98, 20, 22, 56, 85, 165, 248);
+    paintRect(142, 22, 22, 54, 240, 190, 65);
 
     const detected = detectForegroundRegions(rgba, w, h);
-    assert.equal(detected.length, 3, `Expected 3 distinct objects, got ${detected.length}`);
+    assert.equal(detected.length, 4, `Expected 4 individual characters (splitting the bridged pair), got ${detected.length}`);
 
     // Uniform flat image must still decompose via guaranteed salient grid fallback
     const flat = new Uint8ClampedArray(w * h * 4);

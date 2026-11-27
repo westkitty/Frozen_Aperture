@@ -1,5 +1,5 @@
 {
-  "generatedAt": "2026-11-27T21:39:12.644Z",
+  "generatedAt": "2026-11-27T22:03:15.602Z",
   "environment": {
     "browser": "Chrome/158.0.8127.36",
     "renderingBackend": "Headless Chromium ANGLE SwiftShader (software WebGL 2 — NOT physical GPU/mobile benchmark)",
@@ -8,8 +8,8 @@
   },
   "artifact": {
     "path": "index.html",
-    "sha256": "ae8d7bf2108a7c5bd643de910919fb9518b2cef053a532960d7618aaacae49b8",
-    "bytes": 848003
+    "sha256": "d0a8be20d32d089e4513ffa55892a1834afc3388a6e5007e8aa31cbad8470e70",
+    "bytes": 853818
   },
   "checks": [
     {
@@ -75,7 +75,7 @@
     {
       "name": "On-demand idle rendering skips redundant GPU frames when static (#19)",
       "passed": true,
-      "detail": "skipped=106"
+      "detail": "skipped=132"
     },
     {
       "name": "Visual pixel-diff confirms distinct Shaded vs Wireframe renders (#25)",
@@ -85,7 +85,7 @@
     {
       "name": "3D TransformControls gizmo (#16) and .fap.zip bundle export (#22) work in browser",
       "passed": true,
-      "detail": "zipBytes=791403"
+      "detail": "zipBytes=791404"
     },
     {
       "name": "114-body stress scene renders with InstancedMesh draw-call batching (#24, #25)",
@@ -95,7 +95,7 @@
     {
       "name": "Uploaded image auto-compiles into clickable playable 3D frozen-time objects + clean background plate",
       "passed": true,
-      "detail": "objects=3, layers=3, bgPlate=true, moved=true, restored=true"
+      "detail": "objects=4, layers=4, bgPlate=true, moved=true, restored=true"
     }
   ],
   "passedCount": 17,
@@ -104,11 +104,11 @@
     "note": "Measured under headless SwiftShader software WebGL 2; not representative of native hardware-accelerated GPU frame rates.",
     "medianFrameTimeMs": 16.7,
     "p95FrameTimeMs": 100,
-    "drawCalls": 9,
-    "triangles": 78,
-    "geometries": 20,
-    "textures": 5,
-    "objectCount": 3
+    "drawCalls": 11,
+    "triangles": 82,
+    "geometries": 22,
+    "textures": 6,
+    "objectCount": 4
   },
   "screenshots": [
     "reports/screenshots/01-opening-immersive-play.png",
