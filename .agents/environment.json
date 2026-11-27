@@ -1,0 +1,3 @@
+{
+  "install": "touch ~/.bashrc && sed -i '/case \\$- in/,/esac/d' ~/.bashrc 2>/dev/null || true; CHROME=\"$(command -v google-chrome || command -v google-chrome-stable || command -v chromium || command -v chromium-browser || true)\"; if [ -n \"$CHROME\" ]; then grep -qxF \"export CHROMIUM_BIN=$CHROME\" ~/.bashrc 2>/dev/null || echo \"export CHROMIUM_BIN=$CHROME\" >> ~/.bashrc; fi; if [ -f package-lock.json ]; then npm ci --no-audit --no-fund; elif [ -f package.json ]; then npm install --no-audit --no-fund; fi"
+}
