@@ -1,5 +1,5 @@
 {
-  "generatedAt": "2026-11-27T21:30:41.926Z",
+  "generatedAt": "2026-11-27T21:39:12.644Z",
   "environment": {
     "browser": "Chrome/158.0.8127.36",
     "renderingBackend": "Headless Chromium ANGLE SwiftShader (software WebGL 2 — NOT physical GPU/mobile benchmark)",
@@ -8,8 +8,8 @@
   },
   "artifact": {
     "path": "index.html",
-    "sha256": "efdf91be805748478560769328ff0e15b4ad5d26914cf08bfa3f5859a393d57a",
-    "bytes": 838547
+    "sha256": "ae8d7bf2108a7c5bd643de910919fb9518b2cef053a532960d7618aaacae49b8",
+    "bytes": 848003
   },
   "checks": [
     {
@@ -75,7 +75,7 @@
     {
       "name": "On-demand idle rendering skips redundant GPU frames when static (#19)",
       "passed": true,
-      "detail": "skipped=107"
+      "detail": "skipped=106"
     },
     {
       "name": "Visual pixel-diff confirms distinct Shaded vs Wireframe renders (#25)",
@@ -91,19 +91,24 @@
       "name": "114-body stress scene renders with InstancedMesh draw-call batching (#24, #25)",
       "passed": true,
       "detail": "objects=114, instanced=102, drawCalls=39"
+    },
+    {
+      "name": "Uploaded image auto-compiles into clickable playable 3D frozen-time objects + clean background plate",
+      "passed": true,
+      "detail": "objects=3, layers=3, bgPlate=true, moved=true, restored=true"
     }
   ],
-  "passedCount": 16,
+  "passedCount": 17,
   "failedCount": 0,
   "performance": {
     "note": "Measured under headless SwiftShader software WebGL 2; not representative of native hardware-accelerated GPU frame rates.",
     "medianFrameTimeMs": 16.7,
     "p95FrameTimeMs": 100,
-    "drawCalls": 39,
-    "triangles": 28376,
-    "geometries": 35,
-    "textures": 1,
-    "objectCount": 114
+    "drawCalls": 9,
+    "triangles": 78,
+    "geometries": 20,
+    "textures": 5,
+    "objectCount": 3
   },
   "screenshots": [
     "reports/screenshots/01-opening-immersive-play.png",
@@ -116,6 +121,7 @@
     "reports/screenshots/08-workbench-segmentation.png",
     "reports/screenshots/09-workbench-assembly.png",
     "reports/screenshots/10-mobile-viewport.png",
-    "reports/screenshots/11-stress-114-bodies-instanced.png"
+    "reports/screenshots/11-stress-114-bodies-instanced.png",
+    "reports/screenshots/12-uploaded-image-playable.png"
   ]
 }

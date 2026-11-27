@@ -587,6 +587,39 @@ async function run() {
     assert.ok(am2.getBytes(restored.project, restored.project.assets[0].id));
   });
 
+  await test('24. Auto-decomposer extracts distinct foreground objects from any image and falls back cleanly on uniform images', async () => {
+    const { detectForegroundRegions } = await import('../src/source/auto-decomposer.js');
+    const w = 120, h = 80;
+    const rgba = new Uint8ClampedArray(w * h * 4);
+    // Dark background
+    for (let i = 0; i < w * h; i++) {
+      rgba[i * 4] = 12; rgba[i * 4 + 1] = 18; rgba[i * 4 + 2] = 30; rgba[i * 4 + 3] = 255;
+    }
+    // Paint 3 bright distinct foreground objects
+    const paintRect = (x0, y0, rw, rh, r, g, b) => {
+      for (let y = y0; y < y0 + rh; y++) {
+        for (let x = x0; x < x0 + rw; x++) {
+          const idx = (y * w + x) * 4;
+          rgba[idx] = r; rgba[idx + 1] = g; rgba[idx + 2] = b; rgba[idx + 3] = 255;
+        }
+      }
+    };
+    paintRect(14, 18, 22, 40, 240, 80, 70);
+    paintRect(50, 14, 20, 46, 60, 220, 160);
+    paintRect(86, 22, 22, 36, 90, 170, 250);
+
+    const detected = detectForegroundRegions(rgba, w, h);
+    assert.equal(detected.length, 3, `Expected 3 distinct objects, got ${detected.length}`);
+
+    // Uniform flat image must still decompose via guaranteed salient grid fallback
+    const flat = new Uint8ClampedArray(w * h * 4);
+    for (let i = 0; i < w * h; i++) {
+      flat[i * 4] = 80; flat[i * 4 + 1] = 80; flat[i * 4 + 2] = 80; flat[i * 4 + 3] = 255;
+    }
+    const fallback = detectForegroundRegions(flat, w, h);
+    assert.ok(fallback.length >= 6, `Expected grid fallback >= 6 regions, got ${fallback.length}`);
+  });
+
   const failed = results.filter(r => !r.passed);
   console.log(`\nSummary: ${results.length - failed.length}/${results.length} passed.`);
   if (failed.length > 0) {

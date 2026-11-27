@@ -365,6 +365,24 @@ async function run() {
       stress.totalObjects === 114 && stress.telemetry.instancedCount >= 100 && stress.telemetry.drawCalls < 45,
       `objects=${stress.totalObjects}, instanced=${stress.telemetry.instancedCount}, drawCalls=${stress.telemetry.drawCalls}`);
 
+    // Uploaded Image Auto-Compilation: ANY image compiles into playable source_image_layer objects + disoccluded background plate
+    const compiledImg = await cdp.eval(`(async () => {
+      const api = window.__FROZEN_APERTURE__;
+      const res = await api.compileSyntheticIllustrationTest();
+      const beforeHash = api.getStateHash();
+      api.releaseObject(res.firstObjectId);
+      api.stepTicks(30);
+      const afterHash = api.getStateHash();
+      api.reset();
+      const resetHash = api.getStateHash();
+      return { ...res, moved: beforeHash !== afterHash, restored: beforeHash === resetHash };
+    })()`);
+    await sleep(300);
+    screenshots.push(await cdp.screenshot('12-uploaded-image-playable.png'));
+    record('Uploaded image auto-compiles into clickable playable 3D frozen-time objects + clean background plate',
+      compiledImg.objectCount >= 3 && compiledImg.sourceLayerCount === compiledImg.objectCount && compiledImg.hasBgPlate && compiledImg.moved && compiledImg.restored,
+      `objects=${compiledImg.objectCount}, layers=${compiledImg.sourceLayerCount}, bgPlate=${compiledImg.hasBgPlate}, moved=${compiledImg.moved}, restored=${compiledImg.restored}`);
+
     // Performance metrics (clearly labeled as headless software WebGL / SwiftShader)
     const perf = await cdp.eval(`window.__FROZEN_APERTURE__.getTelemetry()`);
     const times = (perf.frameTimesMs || []).filter(n => n > 0).sort((a, b) => a - b);

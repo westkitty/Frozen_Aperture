@@ -465,8 +465,23 @@ export class SceneRenderer {
     this.sceneDoc = sceneDoc;
     this.clearWorld();
 
+    const floorY = sceneDoc.simulation?.floorY ?? 0;
+    if (this.floor) this.floor.position.y = floorY;
+    if (this.gridHelper) this.gridHelper.position.y = floorY + 0.005;
+
     if (sceneDoc.cameras?.sourceCamera) {
       this.applyCameraPose(sceneDoc.cameras.sourceCamera);
+    }
+
+    const bgRep = sceneDoc.environment?.backgroundRepresentation;
+    if (bgRep?.dataUrl) {
+      this.setBackgroundPlate(bgRep.dataUrl, {
+        width: bgRep.worldWidth,
+        height: bgRep.worldHeight,
+        position: bgRep.worldPosition,
+      });
+    } else {
+      this.setBackgroundPlate(null);
     }
 
     // (#24) Partition fragments eligible for InstancedMesh batching vs unique objects
@@ -688,11 +703,23 @@ export class SceneRenderer {
       this.textureCache.set(obj.layerDataUrl, tex);
     }
     const aspect = obj.layerAspect || 0.7;
-    const h = 1.8;
-    const w = h * aspect;
+    const h = obj.layerWorldHeight || 1.8;
+    const w = obj.layerWorldWidth || (h * aspect);
     const geo = new THREE.PlaneGeometry(w, h);
-    const mat = new THREE.MeshStandardMaterial({ map: tex, transparent: true, alphaTest: 0.05, side: THREE.DoubleSide, roughness: 0.65, metalness: 0.08 });
+    const mat = new THREE.MeshStandardMaterial({
+      map: tex,
+      emissiveMap: tex,
+      emissive: 0xffffff,
+      emissiveIntensity: 0.72,
+      transparent: true,
+      alphaTest: 0.05,
+      side: THREE.DoubleSide,
+      roughness: 0.55,
+      metalness: 0.05,
+      fog: false,
+    });
     const mesh = new THREE.Mesh(geo, mat);
+    mesh.userData.isSourceLayer = true;
     mesh.castShadow = true;
     group.add(mesh);
   }
@@ -875,7 +902,11 @@ export class SceneRenderer {
         const isFrozen = isTemporallyFrozen(obj.temporalState);
         group.traverse((child) => {
           if (child.isMesh && !child.userData.isCollisionHelper && child.material?.emissiveIntensity !== undefined) {
-            child.material.emissiveIntensity = isFrozen ? 0.16 : 0.42;
+            if (child.userData.isSourceLayer) {
+              child.material.emissiveIntensity = isFrozen ? 0.72 : 0.95;
+            } else {
+              child.material.emissiveIntensity = isFrozen ? 0.16 : 0.42;
+            }
           }
         });
       }
@@ -971,10 +1002,11 @@ export class SceneRenderer {
     };
   }
 
-  setBackgroundPlate(dataUrl) {
+  setBackgroundPlate(dataUrl, options = {}) {
     if (this.bgBackdropMesh) {
       this.threeScene.remove(this.bgBackdropMesh);
       this.bgBackdropMesh.geometry.dispose();
+      if (this.bgBackdropMesh.material.map) this.bgBackdropMesh.material.map.dispose();
       this.bgBackdropMesh.material.dispose();
       this.bgBackdropMesh = null;
     }
@@ -982,12 +1014,15 @@ export class SceneRenderer {
       this.markDirty();
       return;
     }
+    const width = options.width || 22;
+    const height = options.height || 13.75;
+    const pos = Array.isArray(options.position) && options.position.length === 3 ? options.position : [0, 4.2, -9.5];
     const tex = new THREE.TextureLoader().load(dataUrl, () => this.markDirty());
     tex.colorSpace = THREE.SRGBColorSpace;
-    const geo = new THREE.PlaneGeometry(22, 13.75);
-    const mat = new THREE.MeshBasicMaterial({ map: tex, side: THREE.DoubleSide, depthWrite: false });
+    const geo = new THREE.PlaneGeometry(width, height);
+    const mat = new THREE.MeshBasicMaterial({ map: tex, side: THREE.DoubleSide, depthWrite: false, fog: false });
     this.bgBackdropMesh = new THREE.Mesh(geo, mat);
-    this.bgBackdropMesh.position.set(0, 4.2, -9.5);
+    this.bgBackdropMesh.position.set(pos[0], pos[1], pos[2]);
     this.threeScene.add(this.bgBackdropMesh);
     this.markDirty();
   }

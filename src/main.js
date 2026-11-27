@@ -19,6 +19,7 @@ import { ingestImageFile, createSyntheticTestIllustration } from './source/image
 import { SegmentationWorkbench } from './source/segmentation-canvas.js';
 import { solveCameraFromLandmarks } from './source/camera-calibrator.js';
 import { generateBackgroundPlateFromSource } from './source/background-plate.js';
+import { compileIllustrationToPlayableScene } from './source/auto-decomposer.js';
 import { evaluateCanvasSilhouetteIoU } from './render/silhouette-iou.js';
 import { createPublicCalibrationProject } from './fixtures/calibration-scene.js';
 import { buildStandaloneHtmlExport } from './export/offline-exporter.js';
@@ -199,12 +200,15 @@ class FrozenApertureApp {
           </div>
 
           <div id="play-bar" role="toolbar" aria-label="Immersive Play Controls">
+            <input type="file" id="quick-upload-input" accept="image/*" style="display:none" aria-hidden="true" tabindex="-1" />
+            <button class="play-btn primary" id="play-upload-image" title="Upload any image to compile it into a playable frozen-time 3D scene">Upload Image</button>
+            <span class="play-sep" aria-hidden="true"></span>
             <button class="play-btn" id="play-undo" title="Undo last temporal action">Undo</button>
             <button class="play-btn" id="play-reset" title="Reset scene to initial state">Reset</button>
-            <button class="play-btn" id="play-impact" title="Release impact weight for three-body test">Impact Test</button>
+            <button class="play-btn" id="play-impact" title="Release highest held object or impact weight">Impact Test</button>
             <button class="play-btn" id="play-options-toggle" aria-expanded="false" aria-controls="play-options-popover">Options</button>
             <span class="play-sep" aria-hidden="true"></span>
-            <button class="play-btn primary" id="btn-open-workbench">Workbench</button>
+            <button class="play-btn" id="btn-open-workbench">Workbench</button>
           </div>
 
           <div id="toast" role="status" aria-live="polite"></div>
@@ -484,7 +488,6 @@ class FrozenApertureApp {
           }
         } else {
           const meta = await ingestImageFile(file);
-          this.setWorkbenchOpen(true, 'source');
           await this.applyIngestedIllustration(meta);
         }
       } catch (err) {
@@ -577,6 +580,21 @@ class FrozenApertureApp {
     });
 
     // Play bar controls
+    const quickUpload = document.getElementById('quick-upload-input');
+    document.getElementById('play-upload-image')?.addEventListener('click', () => {
+      quickUpload?.click();
+    });
+    quickUpload?.addEventListener('change', async (e) => {
+      const file = e.target.files?.[0];
+      e.target.value = '';
+      if (!file) return;
+      try {
+        const meta = await ingestImageFile(file);
+        await this.applyIngestedIllustration(meta);
+      } catch (err) {
+        this.notify(err.message, 'error');
+      }
+    });
     document.getElementById('play-undo').addEventListener('click', () => {
       this.audio.unlock();
       if (!this.sim.undo()) this.notify('Nothing to undo.');
@@ -592,10 +610,21 @@ class FrozenApertureApp {
     });
     document.getElementById('play-impact').addEventListener('click', () => {
       this.audio.unlock();
-      if (this.sim.releaseObject('obj_impact_weight')) {
-        this.notify('Impact Weight released — three-body contact chain active.');
+      if (this.sim.getObject('obj_impact_weight')) {
+        if (this.sim.releaseObject('obj_impact_weight')) {
+          this.notify('Impact Weight released — three-body contact chain active.');
+        } else {
+          this.notify('Impact Weight already active or unavailable. Press Reset to repeat.');
+        }
+        return;
+      }
+      const heldDynamic = this.scene.objects
+        .filter(o => !o.physics?.isStatic && (o.temporalState === 'held' || o.temporalState === 'suspended'))
+        .sort((a, b) => (b.position?.[1] || 0) - (a.position?.[1] || 0));
+      if (heldDynamic.length > 0 && this.sim.releaseObject(heldDynamic[0].id)) {
+        this.notify(`Released ${heldDynamic[0].label} — watch gravity & contact propagation.`);
       } else {
-        this.notify('Impact Weight already active or unavailable. Press Reset to repeat.');
+        this.notify('All objects already active. Press Reset to freeze time again.');
       }
     });
     document.getElementById('play-mode-select').addEventListener('change', (e) => this.setExperienceMode(e.target.value));
@@ -652,18 +681,17 @@ class FrozenApertureApp {
   }
 
   async applyIngestedIllustration(meta) {
-    this.project.project.sourceIllustration = meta;
-    this.scene.cameras.sourceCamera.imageWidth = meta.width;
-    this.scene.cameras.sourceCamera.imageHeight = meta.height;
+    this.notify(`Analyzing & compiling "${meta.name}" (${meta.width}×${meta.height}) into playable 3D frozen-time objects…`);
+    const compiled = await compileIllustrationToPlayableScene(this.project, meta);
     this.bgBackdropVisible = true;
-    this.renderer.setBackgroundPlate(meta.dataUrl);
-    this.referenceOverlayOpacity = 0.25;
-    this.updateReferenceOverlay();
+    this.referenceOverlayOpacity = 0;
+    await this.bindActiveScene();
     if (this.workbenchOpen && this.activeStage === 'objects') {
       this.segWorkbench.setImage(meta, this.project.sourceObjects);
     }
     this.renderSidebar();
-    this.notify(`Loaded "${meta.name}" (${meta.width}×${meta.height}) onto 3D backdrop. Click "Extract Objects" to cut out figures.`);
+    this.notify(`Compiled "${meta.name}" into ${compiled.objectCount} playable objects! Click any object in your image to release or suspend time.`);
+    return compiled;
   }
 
   renderSourcePanel(sb) {
@@ -674,14 +702,15 @@ class FrozenApertureApp {
       <div class="wb-section">
         <h3 class="wb-title">Source Illustration</h3>
         <div class="notice">
-          Upload any illustration (PNG, JPEG, WebP) below — or <strong>drag & drop an image or .glb file anywhere onto the window</strong>. Private APERTURE artwork is local-only and not shipped in public Git.
+          Upload <strong>any image</strong> (PNG, JPEG, WebP, GIF) below — or <strong>drag & drop an image anywhere onto the window</strong>. Frozen Aperture automatically decomposes foreground objects into clickable, physics-enabled 3D frozen-time layers over a clean inpainted background.
         </div>
         <div class="wb-row">
           <input type="file" id="in-source-file" aria-label="Import source illustration file" accept="image/*" class="wb-input" style="flex:1" />
         </div>
         <div class="wb-row">
           <button class="wb-btn primary" id="btn-choose-source">Upload Image…</button>
-          <button class="wb-btn" id="btn-load-synthetic-plate">Load Calibration Plate</button>
+          <button class="wb-btn" id="btn-load-synthetic-plate">Demo Image</button>
+          <button class="wb-btn" id="btn-restore-calibration">Calibration Scene</button>
         </div>
         ${src ? `
           <img src="${src.dataUrl}" alt="Uploaded source illustration preview" style="width:100%;max-height:180px;object-fit:contain;border:1px solid var(--border-subtle);border-radius:4px;background:#05070c;margin:8px 0" />
@@ -689,12 +718,13 @@ class FrozenApertureApp {
             <div>File: ${escapeHtml(src.name)}</div>
             <div>Dims: ${src.width} × ${src.height} (${src.mimeType})</div>
             <div>SHA-256: ${src.sha256.slice(0, 24)}…</div>
+            <div>Extracted Playable Objects: ${this.scene.objects.length}</div>
           </div>
           <div class="wb-row">
-            <button class="wb-btn primary" id="btn-goto-objects">Extract Objects →</button>
-            <button class="wb-btn" id="btn-toggle-bg-3d">${this.bgBackdropVisible ? 'Hide 3D Backdrop' : 'Show in 3D'}</button>
+            <button class="wb-btn primary" id="btn-goto-objects">Refine Masks →</button>
+            <button class="wb-btn" id="btn-toggle-bg-3d">${this.bgBackdropVisible ? 'Hide Background Plate' : 'Show Background Plate'}</button>
           </div>
-        ` : '<div class="empty-state">No source illustration attached yet. Click "Upload Image…" or drag an image onto the window.</div>'}
+        ` : '<div class="empty-state">No source illustration uploaded yet. Click "Upload Image…" or drag any image onto the window.</div>'}
       </div>
 
       <div class="wb-section">
@@ -714,7 +744,7 @@ class FrozenApertureApp {
       <div class="wb-section">
         <h3 class="wb-title">Disocclusion Background Plate</h3>
         <div class="wb-row">
-          <button class="wb-btn primary" id="btn-gen-bg-plate">Generate Clean Background Plate</button>
+          <button class="wb-btn primary" id="btn-gen-bg-plate">Regenerate Clean Background Plate</button>
         </div>
         ${bgPlate?.mode === 'disoccluded_inpainted_plate' ? `
           <div class="mono">
@@ -746,6 +776,15 @@ class FrozenApertureApp {
     sb.querySelector('#btn-load-synthetic-plate')?.addEventListener('click', async () => {
       const meta = await createSyntheticTestIllustration();
       await this.applyIngestedIllustration(meta);
+    });
+
+    sb.querySelector('#btn-restore-calibration')?.addEventListener('click', async () => {
+      this.project = await createPublicCalibrationProject(this.assetManager);
+      this.bgBackdropVisible = false;
+      this.referenceOverlayOpacity = 0;
+      await this.bindActiveScene();
+      this.renderSidebar();
+      this.notify('Restored Public Calibration Scene (38 physics bodies + vortex).');
     });
 
     sb.querySelector('#in-ref-opacity')?.addEventListener('input', (e) => {
@@ -790,10 +829,18 @@ class FrozenApertureApp {
     sb.querySelector('#btn-gen-bg-plate')?.addEventListener('click', async (e) => {
       await this.runWithBusyButton(e.currentTarget, 'Inpainting…', async () => {
         try {
+          const prev = this.scene.environment.backgroundRepresentation;
           const plate = await generateBackgroundPlateFromSource(this.project.project.sourceIllustration, this.project.sourceObjects);
+          if (prev?.worldWidth) plate.worldWidth = prev.worldWidth;
+          if (prev?.worldHeight) plate.worldHeight = prev.worldHeight;
+          if (prev?.worldPosition) plate.worldPosition = prev.worldPosition;
           this.scene.environment.backgroundRepresentation = plate;
           this.bgBackdropVisible = true;
-          this.renderer.setBackgroundPlate(plate.dataUrl);
+          this.renderer.setBackgroundPlate(plate.dataUrl, {
+            width: plate.worldWidth,
+            height: plate.worldHeight,
+            position: plate.worldPosition,
+          });
           this.renderSidebar();
           this.notify(`Generated disoccluded background plate (${plate.inpaintedPixels} px inpainted).`);
         } catch (err) {
@@ -805,7 +852,11 @@ class FrozenApertureApp {
     sb.querySelector('#btn-toggle-bg-3d')?.addEventListener('click', () => {
       this.bgBackdropVisible = !this.bgBackdropVisible;
       const plateUrl = bgPlate?.dataUrl || src?.dataUrl || null;
-      this.renderer.setBackgroundPlate(this.bgBackdropVisible ? plateUrl : null);
+      this.renderer.setBackgroundPlate(this.bgBackdropVisible ? plateUrl : null, {
+        width: bgPlate?.worldWidth,
+        height: bgPlate?.worldHeight,
+        position: bgPlate?.worldPosition,
+      });
       this.renderSidebar();
     });
   }
@@ -1682,6 +1733,17 @@ class FrozenApertureApp {
         this.updateReferenceOverlay();
         if (this.workbenchOpen) this.renderSidebar();
         return meta.sha256;
+      },
+      compileSyntheticIllustrationTest: async () => {
+        const meta = await createSyntheticTestIllustration();
+        await this.applyIngestedIllustration(meta);
+        this.renderer.renderFrame(true);
+        return {
+          objectCount: this.scene.objects.length,
+          sourceLayerCount: this.scene.objects.filter(o => o.representationType === 'source_image_layer').length,
+          hasBgPlate: Boolean(this.renderer.bgBackdropMesh),
+          firstObjectId: this.scene.objects[0]?.id || null,
+        };
       },
       loadStressScene114: async () => {
         this.project = await createPublicCalibrationProject(this.assetManager, { fragmentCount: 100 });
