@@ -22,7 +22,7 @@ import { generateBackgroundPlateFromSource } from './source/background-plate.js'
 import { evaluateCanvasSilhouetteIoU } from './render/silhouette-iou.js';
 import { createPublicCalibrationProject } from './fixtures/calibration-scene.js';
 import { buildStandaloneHtmlExport } from './export/offline-exporter.js';
-import { exportProjectZipBundle, importProjectZipBundle } from './export/zip-bundle.js';
+import { exportProjectZipBundle, exportProjectZipBundleCompressed, importProjectZipBundleAsync } from './export/zip-bundle.js';
 
 const WORKFLOW_STAGES = [
   { id: 'source', label: 'Source' },
@@ -444,6 +444,7 @@ class FrozenApertureApp {
   renderSidebar() {
     const sb = document.getElementById('workbench-sidebar');
     if (!sb || !this.project) return;
+    const token = (this.sidebarRenderToken = (this.sidebarRenderToken || 0) + 1);
 
     if (this.activeStage === 'source') this.renderSourcePanel(sb);
     else if (this.activeStage === 'objects') this.renderObjectsPanel(sb);
@@ -451,7 +452,7 @@ class FrozenApertureApp {
     else if (this.activeStage === 'assembly') this.renderAssemblyPanel(sb);
     else if (this.activeStage === 'simulation') this.renderSimulationPanel(sb);
     else if (this.activeStage === 'validation') this.renderValidationPanel(sb);
-    else if (this.activeStage === 'export') this.renderExportPanel(sb);
+    else if (this.activeStage === 'export') this.renderExportPanel(sb, token);
   }
 
   renderSourcePanel(sb) {
@@ -1181,8 +1182,9 @@ class FrozenApertureApp {
     });
   }
 
-  async renderExportPanel(sb) {
+  async renderExportPanel(sb, renderToken = this.sidebarRenderToken) {
     const saved = await this.store.listSavedAsync();
+    if (renderToken !== this.sidebarRenderToken || this.activeStage !== 'export') return;
     sb.innerHTML = `
       <div class="wb-section">
         <h3 class="wb-title">Project Persistence — IndexedDB & Bundles (#21, #22)</h3>
@@ -1235,9 +1237,9 @@ class FrozenApertureApp {
       }
     });
 
-    sb.querySelector('#btn-export-zip')?.addEventListener('click', () => {
+    sb.querySelector('#btn-export-zip')?.addEventListener('click', async () => {
       try {
-        const zipBytes = exportProjectZipBundle(this.project, this.assetManager);
+        const zipBytes = await exportProjectZipBundleCompressed(this.project, this.assetManager);
         const blob = new Blob([zipBytes], { type: 'application/zip' });
         const url = URL.createObjectURL(blob);
         const a = document.createElement('a');
@@ -1245,7 +1247,7 @@ class FrozenApertureApp {
         a.download = sanitizeFilename(`${this.project.project.id}_rev${this.project.project.revision}.fap.zip`);
         a.click();
         URL.revokeObjectURL(url);
-        this.notify(`Exported portable .fap.zip bundle (${(zipBytes.byteLength / 1024).toFixed(1)} KB).`);
+        this.notify(`Exported DEFLATE-compressed .fap.zip bundle (${(zipBytes.byteLength / 1024).toFixed(1)} KB).`);
       } catch (err) {
         this.notify(err.message, 'error');
       }
@@ -1256,7 +1258,7 @@ class FrozenApertureApp {
       if (!file) return;
       try {
         const buf = new Uint8Array(await file.arrayBuffer());
-        const { project, entryCount } = importProjectZipBundle(buf, this.assetManager);
+        const { project, entryCount } = await importProjectZipBundleAsync(buf, this.assetManager);
         this.project = project;
         await this.bindActiveScene();
         this.renderSidebar();

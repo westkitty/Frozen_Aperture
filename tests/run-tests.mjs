@@ -572,6 +572,21 @@ async function run() {
     assert.ok(sim.getObject('tall_capsule').position[1] >= 0.999, `Capsule sunk into floor: y=${sim.getObject('tall_capsule').position[1]}`);
   });
 
+  await test('23. DEFLATE-compressed .fap.zip shrinks archive size significantly and roundtrips with CRC-32', async () => {
+    const { exportProjectZipBundleCompressed, importProjectZipBundleAsync } = await import('../src/export/zip-bundle.js');
+    const am = new AssetManager();
+    const project = await createPublicCalibrationProject(am);
+    const uncompressed = exportProjectZipBundle(project, am);
+    const compressed = await exportProjectZipBundleCompressed(project, am);
+    assert.ok(compressed.byteLength < uncompressed.byteLength * 0.5,
+      `Expected >50% compression (${compressed.byteLength} vs ${uncompressed.byteLength})`);
+
+    const am2 = new AssetManager();
+    const restored = await importProjectZipBundleAsync(compressed, am2);
+    assert.equal(restored.project.project.id, project.project.id);
+    assert.ok(am2.getBytes(restored.project, restored.project.assets[0].id));
+  });
+
   const failed = results.filter(r => !r.passed);
   console.log(`\nSummary: ${results.length - failed.length}/${results.length} passed.`);
   if (failed.length > 0) {

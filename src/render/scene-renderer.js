@@ -808,7 +808,7 @@ export class SceneRenderer {
 
       const xform = simEngine ? simEngine.getInterpolatedTransform(obj) : { position: obj.position, rotation: obj.rotation };
 
-      // (#24) Instanced fragment update
+      // (#24) Instanced fragment update with per-instance active/frozen/selected brightness encoding
       const instRef = this.instancedObjectMap.get(obj.id);
       if (instRef) {
         const batch = this.instancedBatches.get(instRef.shapeKey);
@@ -827,6 +827,23 @@ export class SceneRenderer {
           this._dummy.updateMatrix();
           batch.mesh.setMatrixAt(instRef.index, this._dummy.matrix);
           batch.mesh.instanceMatrix.needsUpdate = true;
+
+          // Only update GPU instanceColor buffer when temporal/selection state actually changes
+          const visualKey = `${isActive ? 'a' : 'f'}:${this.selectedObjectId === obj.id ? 's' : 'n'}`;
+          if (instRef.lastVisualKey !== visualKey) {
+            instRef.lastVisualKey = visualKey;
+            if (!this._tmpColor) this._tmpColor = new THREE.Color();
+            this._tmpColor.set(instRef.baseColor);
+            if (this.selectedObjectId === obj.id) {
+              this._tmpColor.lerp(new THREE.Color(0x7dd3fc), 0.45);
+            } else if (isActive) {
+              this._tmpColor.multiplyScalar(1.32);
+            } else {
+              this._tmpColor.multiplyScalar(0.82);
+            }
+            batch.mesh.setColorAt(instRef.index, this._tmpColor);
+            if (batch.mesh.instanceColor) batch.mesh.instanceColor.needsUpdate = true;
+          }
         }
         if (isActive) this.updateTrail(obj, xform.position);
         continue;
