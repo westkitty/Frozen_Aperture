@@ -1,43 +1,63 @@
 /**
  * Frozen Aperture — Three.js WebGL 2 Scene Renderer
- * Consumes canonical scene state without owning simulation state.
- * Features:
- * - Genuine offline GLB parsing (GLTFLoader.parse from validated bytes)
- * - Glossy black-liquid Central Aperture vortex that strictly obeys temporalState
- * - Shaded, Clay, Wireframe, and Collision Proxy inspection modes
- * - Source-camera calibration, named views, isolate/focus, reference overlay
- * - Tap-vs-drag/pinch gesture disambiguation
- * - Bounded VFX ripple pool, DPR capping, quality tiers (high/balanced/economy), reduced-motion
+ * Upgraded with:
+ * - #9 Multi-component asset slot rendering (body/weapon/clothing/effect)
+ * - #16 Interactive 3D TransformControls gizmos (translate/rotate/scale + snap)
+ * - #17 Custom Glossy Black-Liquid GLSL Shader on Central Aperture
+ * - #18 Render-state interpolation + bounded ribbon motion trails
+ * - #19 True on-demand idle rendering (idleFramesSkipped telemetry)
+ * - #23 Visible 3D selection highlight ring for keyboard/pointer cycling
+ * - #24 InstancedMesh batching for high-count procedural fragment pools (114+ bodies)
  */
 
 import * as THREE from 'three';
 import { OrbitControls } from 'three/examples/jsm/controls/OrbitControls.js';
+import { TransformControls } from 'three/examples/jsm/controls/TransformControls.js';
 import { GLTFLoader } from 'three/examples/jsm/loaders/GLTFLoader.js';
 import { isTemporallyFrozen } from '../simulation/temporal-engine.js';
+import { createBlackLiquidVortexMaterial } from './vortex-shader.js';
 
 export class SceneRenderer {
-  constructor(container, { assetManager, onSelectObject = null, onObjectTap = null, onContextLost = null } = {}) {
+  constructor(container, { assetManager, onSelectObject = null, onObjectTap = null, onTransformCommit = null, onContextLost = null } = {}) {
     this.container = container;
     this.assetManager = assetManager;
     this.onSelectObject = onSelectObject;
     this.onObjectTap = onObjectTap;
+    this.onTransformCommit = onTransformCommit;
     this.onContextLost = onContextLost;
 
     this.sceneDoc = null;
     this.projectDoc = null;
     this.selectedObjectId = null;
     this.isolatedObjectId = null;
-    this.inspectionMode = 'shaded'; // shaded | clay | wireframe
+    this.inspectionMode = 'shaded';
     this.showCollisionProxies = false;
-    this.qualityTier = 'high'; // high | balanced | economy
+    this.qualityTier = 'high';
     this.reducedMotion = false;
     this.experienceMode = 'frozen_second';
 
-    this.objectMeshes = new Map();       // objectId -> THREE.Group
-    this.collisionHelpers = new Map();   // objectId -> THREE.Mesh
-    this.loadedAssetCache = new Map();   // assetId -> THREE.Group template
-    this.textureCache = new Map();       // dataUrl -> THREE.Texture
+    this.objectMeshes = new Map();
+    this.collisionHelpers = new Map();
+    this.loadedAssetCache = new Map();
+    this.textureCache = new Map();
     this.ripplePool = [];
+
+    // (#24) Instanced fragment batches
+    this.instancedBatches = new Map();   // shapeKey -> { mesh: THREE.InstancedMesh, ids: string[] }
+    this.instancedObjectMap = new Map(); // objectId -> { shapeKey, index, baseColor }
+    this._dummy = new THREE.Object3D();
+
+    // (#18) Bounded motion trails for active high-speed bodies
+    this.trailMap = new Map(); // objectId -> { line: THREE.Line, positions: Float32Array, count: number }
+
+    // (#17) Custom black-liquid vortex shader material
+    this.vortexShaderMat = createBlackLiquidVortexMaterial();
+
+    // (#19) On-demand idle rendering state
+    this.dirty = true;
+    this.cameraMoving = false;
+    this.idleFramesSkipped = 0;
+    this.framesRendered = 0;
 
     this.gltfLoader = new GLTFLoader();
     this.raycaster = new THREE.Raycaster();
@@ -46,27 +66,19 @@ export class SceneRenderer {
     this.pointerDownPos = null;
     this.pointerDownTime = 0;
 
-    // Shared materials (reused across objects to minimize GPU allocations)
-    this.clayMaterial = new THREE.MeshStandardMaterial({
-      color: 0xcbd5e1,
-      roughness: 0.78,
-      metalness: 0.05,
-    });
-    this.wireframeMaterial = new THREE.MeshBasicMaterial({
-      color: 0x38bdf8,
-      wireframe: true,
-    });
-    this.collisionWireMat = new THREE.MeshBasicMaterial({
-      color: 0xf59e0b,
-      wireframe: true,
-      transparent: true,
-      opacity: 0.65,
-    });
+    this.clayMaterial = new THREE.MeshStandardMaterial({ color: 0xcbd5e1, roughness: 0.78, metalness: 0.05 });
+    this.wireframeMaterial = new THREE.MeshBasicMaterial({ color: 0x38bdf8, wireframe: true });
+    this.collisionWireMat = new THREE.MeshBasicMaterial({ color: 0xf59e0b, wireframe: true, transparent: true, opacity: 0.65 });
 
     this.initRenderer();
     this.initScene();
+    this.initGizmoAndSelection();
     this.initRipplePool();
     this.bindInput();
+  }
+
+  markDirty() {
+    this.dirty = true;
   }
 
   initRenderer() {
@@ -76,7 +88,7 @@ export class SceneRenderer {
     this.renderer = new THREE.WebGLRenderer({
       antialias: true,
       powerPreference: 'high-performance',
-      preserveDrawingBuffer: true, // Enables reliable screenshot QA capture
+      preserveDrawingBuffer: true,
     });
     this.renderer.setSize(w, h);
     this.renderer.setPixelRatio(Math.min(window.devicePixelRatio || 1, 2));
@@ -97,6 +109,7 @@ export class SceneRenderer {
       if (this.onContextLost) this.onContextLost(true);
     });
     this.renderer.domElement.addEventListener('webglcontextrestored', () => {
+      this.markDirty();
       if (this.onContextLost) this.onContextLost(false);
     });
 
@@ -109,6 +122,9 @@ export class SceneRenderer {
     this.controls.maxDistance = 42;
     this.controls.minDistance = 1.2;
     this.controls.target.set(0, 1.4, 0);
+    this.controls.addEventListener('start', () => { this.cameraMoving = true; this.markDirty(); });
+    this.controls.addEventListener('change', () => { this.markDirty(); });
+    this.controls.addEventListener('end', () => { this.cameraMoving = false; this.markDirty(); });
     this.controls.update();
   }
 
@@ -117,7 +133,6 @@ export class SceneRenderer {
     this.threeScene.background = new THREE.Color(0x05070c);
     this.threeScene.fog = new THREE.FogExp2(0x05070c, 0.022);
 
-    // Speculative dark architectural lighting rig
     this.ambientLight = new THREE.HemisphereLight(0x8bb8e8, 0x0b1020, 0.65);
     this.threeScene.add(this.ambientLight);
 
@@ -142,37 +157,119 @@ export class SceneRenderer {
     this.accentLight.position.set(0, 2.8, 0);
     this.threeScene.add(this.accentLight);
 
-    // Reflective dark obsidian architectural floor
     const floorGeo = new THREE.CircleGeometry(28, 64);
-    const floorMat = new THREE.MeshStandardMaterial({
-      color: 0x070b14,
-      roughness: 0.22,
-      metalness: 0.78,
-    });
+    const floorMat = new THREE.MeshStandardMaterial({ color: 0x070b14, roughness: 0.22, metalness: 0.78 });
     this.floor = new THREE.Mesh(floorGeo, floorMat);
     this.floor.rotation.x = -Math.PI / 2;
     this.floor.receiveShadow = true;
     this.threeScene.add(this.floor);
 
-    // Subtle spatial calibration grid ring on the floor
     this.gridHelper = new THREE.PolarGridHelper(12, 12, 6, 64, 0x1e293b, 0x0f172a);
     this.gridHelper.position.y = 0.005;
     this.threeScene.add(this.gridHelper);
 
     this.worldRoot = new THREE.Group();
     this.threeScene.add(this.worldRoot);
+
+    this.trailRoot = new THREE.Group();
+    this.threeScene.add(this.trailRoot);
+  }
+
+  /**
+   * (#16) TransformControls gizmo + (#23) 3D selection highlight ring.
+   */
+  initGizmoAndSelection() {
+    this.gizmo = new TransformControls(this.camera, this.renderer.domElement);
+    this.gizmo.enabled = false;
+    const gizmoHelper = typeof this.gizmo.getHelper === 'function' ? this.gizmo.getHelper() : this.gizmo;
+    if (gizmoHelper) {
+      gizmoHelper.visible = false;
+      this.threeScene.add(gizmoHelper);
+    }
+    this.gizmoHelper = gizmoHelper;
+    this.gizmoSnap = false;
+
+    this.gizmo.addEventListener('dragging-changed', (ev) => {
+      this.controls.enabled = !ev.value;
+      this.markDirty();
+    });
+    this.gizmo.addEventListener('objectChange', () => {
+      this.markDirty();
+      const target = this.gizmo.object;
+      const objId = target?.userData?.sceneObjectId;
+      if (!objId || !this.sceneDoc) return;
+      const obj = this.sceneDoc.objects.find(o => o.id === objId);
+      if (!obj) return;
+      obj.position = [Number(target.position.x.toFixed(3)), Number(target.position.y.toFixed(3)), Number(target.position.z.toFixed(3))];
+      obj.rotation = [Number(target.rotation.x.toFixed(3)), Number(target.rotation.y.toFixed(3)), Number(target.rotation.z.toFixed(3))];
+      obj.scale = [Math.max(0.05, Number(target.scale.x.toFixed(3))), Math.max(0.05, Number(target.scale.y.toFixed(3))), Math.max(0.05, Number(target.scale.z.toFixed(3)))];
+      if (this.onTransformCommit) this.onTransformCommit(obj);
+    });
+
+    // (#23) Visible 3D selection ring
+    const ringGeo = new THREE.RingGeometry(0.58, 0.66, 36);
+    const ringMat = new THREE.MeshBasicMaterial({ color: 0x38bdf8, side: THREE.DoubleSide, transparent: true, opacity: 0.85 });
+    this.selectionRing = new THREE.Mesh(ringGeo, ringMat);
+    this.selectionRing.rotation.x = -Math.PI / 2;
+    this.selectionRing.visible = false;
+    this.threeScene.add(this.selectionRing);
+  }
+
+  setGizmoEnabled(enabled, mode = 'translate', snap = this.gizmoSnap) {
+    this.gizmo.enabled = Boolean(enabled);
+    this.gizmoSnap = Boolean(snap);
+    this.gizmo.setMode(mode);
+    this.gizmo.setTranslationSnap(this.gizmoSnap ? 0.25 : null);
+    this.gizmo.setRotationSnap(this.gizmoSnap ? THREE.MathUtils.degToRad(15) : null);
+    this.gizmo.setScaleSnap(this.gizmoSnap ? 0.1 : null);
+    if (this.gizmoHelper) this.gizmoHelper.visible = Boolean(enabled) && Boolean(this.gizmo.object);
+    if (enabled && this.selectedObjectId) {
+      this.attachGizmoToObject(this.selectedObjectId);
+    } else if (!enabled) {
+      this.gizmo.detach();
+    }
+    this.markDirty();
+  }
+
+  attachGizmoToObject(objectId) {
+    const group = this.objectMeshes.get(objectId);
+    if (group && this.gizmo.enabled) {
+      this.gizmo.attach(group);
+      if (this.gizmoHelper) this.gizmoHelper.visible = true;
+    } else {
+      this.gizmo.detach();
+      if (this.gizmoHelper) this.gizmoHelper.visible = false;
+    }
+    this.markDirty();
+  }
+
+  setSelectedObject(objectId) {
+    this.selectedObjectId = objectId || null;
+    if (this.gizmo.enabled) this.attachGizmoToObject(this.selectedObjectId);
+    this.updateSelectionRing();
+    this.markDirty();
+  }
+
+  updateSelectionRing() {
+    if (!this.selectedObjectId || !this.sceneDoc) {
+      this.selectionRing.visible = false;
+      return;
+    }
+    const obj = this.sceneDoc.objects.find(o => o.id === this.selectedObjectId);
+    if (!obj || obj.visible === false) {
+      this.selectionRing.visible = false;
+      return;
+    }
+    const r = (obj.collision?.radius ?? 0.45) * Math.max(obj.scale?.[0] ?? 1, obj.scale?.[2] ?? 1);
+    this.selectionRing.position.set(obj.position[0], Math.max(0.03, obj.position[1] - r), obj.position[2]);
+    this.selectionRing.scale.setScalar(Math.max(0.7, r * 1.4));
+    this.selectionRing.visible = true;
   }
 
   initRipplePool() {
     const geo = new THREE.RingGeometry(0.18, 0.26, 28);
     for (let i = 0; i < 16; i++) {
-      const mat = new THREE.MeshBasicMaterial({
-        color: 0x38bdf8,
-        side: THREE.DoubleSide,
-        transparent: true,
-        opacity: 0,
-        depthWrite: false,
-      });
+      const mat = new THREE.MeshBasicMaterial({ color: 0x38bdf8, side: THREE.DoubleSide, transparent: true, opacity: 0, depthWrite: false });
       const mesh = new THREE.Mesh(geo, mat);
       mesh.visible = false;
       this.threeScene.add(mesh);
@@ -191,6 +288,7 @@ export class SceneRenderer {
     slot.mesh.scale.setScalar(1);
     slot.mesh.material.color.setHex(color);
     slot.mesh.material.opacity = 0.85;
+    this.markDirty();
   }
 
   bindInput() {
@@ -198,11 +296,10 @@ export class SceneRenderer {
 
     dom.addEventListener('pointerdown', (e) => {
       this.activePointers.add(e.pointerId);
-      if (this.activePointers.size === 1 && e.button === 0) {
+      if (this.activePointers.size === 1 && e.button === 0 && !this.gizmo.dragging) {
         this.pointerDownPos = { x: e.clientX, y: e.clientY };
         this.pointerDownTime = performance.now();
       } else {
-        // Multi-touch pinch/pan: cancel tap detection
         this.pointerDownPos = null;
       }
     });
@@ -215,18 +312,17 @@ export class SceneRenderer {
     dom.addEventListener('pointerup', (e) => {
       const wasSinglePointer = this.activePointers.size === 1;
       this.activePointers.delete(e.pointerId);
-      if (!wasSinglePointer || !this.pointerDownPos) return;
+      if (!wasSinglePointer || !this.pointerDownPos || this.gizmo.dragging) return;
 
       const dist = Math.hypot(e.clientX - this.pointerDownPos.x, e.clientY - this.pointerDownPos.y);
       const elapsed = performance.now() - this.pointerDownTime;
       this.pointerDownPos = null;
 
-      // Strict tap-vs-drag threshold: camera drags NEVER accidentally trigger object release
       if (dist > 6 || elapsed > 450) return;
 
       const hitId = this.pickObjectAt(e.clientX, e.clientY);
       if (hitId) {
-        this.selectedObjectId = hitId;
+        this.setSelectedObject(hitId);
         if (this.onSelectObject) this.onSelectObject(hitId);
         if (this.onObjectTap) this.onObjectTap(hitId);
       }
@@ -243,13 +339,21 @@ export class SceneRenderer {
     for (const group of this.objectMeshes.values()) {
       if (group.visible) targets.push(group);
     }
+    for (const batch of this.instancedBatches.values()) {
+      if (batch.mesh.visible) targets.push(batch.mesh);
+    }
+
     const hits = this.raycaster.intersectObjects(targets, true);
     for (const hit of hits) {
+      if (hit.object.isInstancedMesh && hit.instanceId !== undefined) {
+        const shapeKey = hit.object.userData.instancedShapeKey;
+        const batch = this.instancedBatches.get(shapeKey);
+        const objId = batch?.ids?.[hit.instanceId];
+        if (objId) return objId;
+      }
       let cur = hit.object;
       while (cur) {
-        if (cur.userData && cur.userData.sceneObjectId) {
-          return cur.userData.sceneObjectId;
-        }
+        if (cur.userData && cur.userData.sceneObjectId) return cur.userData.sceneObjectId;
         cur = cur.parent;
       }
     }
@@ -267,16 +371,19 @@ export class SceneRenderer {
       this.renderer.shadowMap.enabled = true;
       this.keyLight.castShadow = false;
     } else {
-      // economy
       this.renderer.setPixelRatio(1);
       this.renderer.shadowMap.enabled = false;
       this.keyLight.castShadow = false;
+      this.clearTrails();
     }
+    this.markDirty();
   }
 
   setReducedMotion(flag) {
     this.reducedMotion = Boolean(flag);
     this.controls.enableDamping = !this.reducedMotion;
+    if (this.reducedMotion) this.clearTrails();
+    this.markDirty();
   }
 
   setInspectionMode(mode) {
@@ -284,44 +391,59 @@ export class SceneRenderer {
     for (const group of this.objectMeshes.values()) {
       this.applyInspectionMaterial(group);
     }
+    for (const batch of this.instancedBatches.values()) {
+      if (!batch.mesh.userData.originalMaterial) batch.mesh.userData.originalMaterial = batch.mesh.material;
+      if (mode === 'clay') batch.mesh.material = this.clayMaterial;
+      else if (mode === 'wireframe') batch.mesh.material = this.wireframeMaterial;
+      else batch.mesh.material = batch.mesh.userData.originalMaterial;
+    }
+    this.markDirty();
   }
 
   setShowCollisionProxies(show) {
     this.showCollisionProxies = Boolean(show);
-    for (const helper of this.collisionHelpers.values()) {
-      helper.visible = this.showCollisionProxies;
-    }
+    for (const helper of this.collisionHelpers.values()) helper.visible = this.showCollisionProxies;
+    this.markDirty();
   }
 
   setIsolatedObject(objectId) {
     this.isolatedObjectId = objectId || null;
     this.syncVisibility();
+    this.markDirty();
   }
 
   syncVisibility() {
     if (!this.sceneDoc) return;
     for (const obj of this.sceneDoc.objects) {
       const group = this.objectMeshes.get(obj.id);
-      if (!group) continue;
-      const baseVis = obj.visible !== false;
-      group.visible = this.isolatedObjectId ? (obj.id === this.isolatedObjectId) : baseVis;
+      if (group) {
+        const baseVis = obj.visible !== false;
+        group.visible = this.isolatedObjectId ? (obj.id === this.isolatedObjectId) : baseVis;
+      }
+    }
+    for (const batch of this.instancedBatches.values()) {
+      batch.mesh.visible = !this.isolatedObjectId || batch.ids.includes(this.isolatedObjectId);
     }
   }
 
   applyInspectionMaterial(group) {
     group.traverse((child) => {
       if (!child.isMesh || child.userData.isCollisionHelper) return;
-      if (!child.userData.originalMaterial) {
-        child.userData.originalMaterial = child.material;
-      }
-      if (this.inspectionMode === 'clay') {
-        child.material = this.clayMaterial;
-      } else if (this.inspectionMode === 'wireframe') {
-        child.material = this.wireframeMaterial;
-      } else {
-        child.material = child.userData.originalMaterial;
-      }
+      if (!child.userData.originalMaterial) child.userData.originalMaterial = child.material;
+      if (this.inspectionMode === 'clay') child.material = this.clayMaterial;
+      else if (this.inspectionMode === 'wireframe') child.material = this.wireframeMaterial;
+      else child.material = child.userData.originalMaterial;
     });
+  }
+
+  isInstancingEligible(obj) {
+    return (
+      !obj.isVortex &&
+      obj.category === 'fragment' &&
+      obj.representationType === 'procedural_geometry' &&
+      !obj.assetId &&
+      (!obj.components || Object.keys(obj.components).length === 0)
+    );
   }
 
   async loadScene(projectDoc, sceneDoc) {
@@ -333,18 +455,70 @@ export class SceneRenderer {
       this.applyCameraPose(sceneDoc.cameras.sourceCamera);
     }
 
+    // (#24) Partition fragments eligible for InstancedMesh batching vs unique objects
+    const instancedBuckets = { sphere: [], box: [] };
     for (const obj of sceneDoc.objects) {
-      await this.upsertObjectMesh(obj);
+      if (this.isInstancingEligible(obj)) {
+        const key = obj.collision?.shape === 'box' ? 'box' : 'sphere';
+        instancedBuckets[key].push(obj);
+      } else {
+        await this.upsertObjectMesh(obj);
+      }
     }
-    this.syncFromSimulation();
+
+    this.buildInstancedBuckets(instancedBuckets);
+    this.syncFromSimulation(0, null);
+    this.markDirty();
+  }
+
+  buildInstancedBuckets(buckets) {
+    for (const [shapeKey, list] of Object.entries(buckets)) {
+      if (list.length === 0) continue;
+      const geo = shapeKey === 'box' ? new THREE.BoxGeometry(2, 2, 2) : new THREE.IcosahedronGeometry(1, 1);
+      const mat = new THREE.MeshStandardMaterial({ color: 0xffffff, roughness: 0.3, metalness: 0.72 });
+      const inst = new THREE.InstancedMesh(geo, mat, list.length);
+      inst.castShadow = true;
+      inst.receiveShadow = true;
+      inst.userData.instancedShapeKey = shapeKey;
+      const color = new THREE.Color();
+      const ids = [];
+
+      for (let i = 0; i < list.length; i++) {
+        const obj = list[i];
+        ids.push(obj.id);
+        color.set(obj.material?.color || '#38bdf8');
+        inst.setColorAt(i, color);
+        this.instancedObjectMap.set(obj.id, { shapeKey, index: i, baseColor: obj.material?.color || '#38bdf8' });
+      }
+      if (inst.instanceColor) inst.instanceColor.needsUpdate = true;
+      this.worldRoot.add(inst);
+      this.instancedBatches.set(shapeKey, { mesh: inst, ids });
+    }
+  }
+
+  clearTrails() {
+    for (const t of this.trailMap.values()) {
+      this.trailRoot.remove(t.line);
+      t.line.geometry.dispose();
+      t.line.material.dispose();
+    }
+    this.trailMap.clear();
   }
 
   clearWorld() {
-    for (const group of this.objectMeshes.values()) {
-      this.worldRoot.remove(group);
-    }
+    this.gizmo.detach();
+    for (const group of this.objectMeshes.values()) this.worldRoot.remove(group);
     this.objectMeshes.clear();
     this.collisionHelpers.clear();
+    for (const batch of this.instancedBatches.values()) {
+      this.worldRoot.remove(batch.mesh);
+      batch.mesh.geometry.dispose();
+      batch.mesh.material.dispose();
+    }
+    this.instancedBatches.clear();
+    this.instancedObjectMap.clear();
+    this.clearTrails();
+    this.markDirty();
   }
 
   async upsertObjectMesh(obj) {
@@ -360,20 +534,32 @@ export class SceneRenderer {
 
     if (obj.isVortex) {
       this.buildVortexVisual(group, obj);
+    } else if (obj.components && Object.keys(obj.components).length > 0 && this.assetManager) {
+      // (#9) Render multi-component asset slots independently
+      let loadedAny = false;
+      for (const [slotName, comp] of Object.entries(obj.components)) {
+        if (!comp?.assetId) continue;
+        const slotGroup = await this.loadGlbGroup(comp.assetId);
+        if (slotGroup) {
+          slotGroup.name = `component_${slotName}`;
+          if (comp.position) slotGroup.position.set(...comp.position);
+          if (comp.rotation) slotGroup.rotation.set(...comp.rotation);
+          if (comp.scale) slotGroup.scale.set(...comp.scale);
+          group.add(slotGroup);
+          loadedAny = true;
+        }
+      }
+      if (!loadedAny) this.buildProceduralVisual(group, obj);
     } else if (obj.representationType === 'source_image_layer' && obj.layerDataUrl) {
       this.buildSourceLayerVisual(group, obj);
     } else if (obj.assetId && this.assetManager) {
       const loaded = await this.loadGlbGroup(obj.assetId);
-      if (loaded) {
-        group.add(loaded);
-      } else {
-        this.buildProceduralVisual(group, obj);
-      }
+      if (loaded) group.add(loaded);
+      else this.buildProceduralVisual(group, obj);
     } else {
       this.buildProceduralVisual(group, obj);
     }
 
-    // Build collision proxy helper
     const colHelper = this.buildCollisionHelper(obj);
     colHelper.visible = this.showCollisionProxies;
     group.add(colHelper);
@@ -382,26 +568,17 @@ export class SceneRenderer {
     this.applyInspectionMaterial(group);
     this.worldRoot.add(group);
     this.objectMeshes.set(obj.id, group);
-    this.syncObjectTransform(obj, group);
+    this.syncObjectTransform(obj, group, obj.position, obj.rotation);
+    this.markDirty();
   }
 
   buildVortexVisual(group, obj) {
-    // Glossy black-liquid obsidian core
-    const coreGeo = new THREE.SphereGeometry(0.72, 36, 36);
-    const coreMat = new THREE.MeshPhysicalMaterial({
-      color: 0x03050a,
-      roughness: 0.06,
-      metalness: 0.94,
-      clearcoat: 1.0,
-      clearcoatRoughness: 0.05,
-      emissive: 0x0c2442,
-      emissiveIntensity: 0.55,
-    });
-    const core = new THREE.Mesh(coreGeo, coreMat);
+    // (#17) Custom Glossy Black-Liquid GLSL Shader Core
+    const coreGeo = new THREE.SphereGeometry(0.72, 40, 40);
+    const core = new THREE.Mesh(coreGeo, this.vortexShaderMat);
     core.castShadow = true;
     group.add(core);
 
-    // Layered curved tendril rings (strictly animated ONLY when obj.temporalState === 'active')
     const ringGroup = new THREE.Group();
     ringGroup.name = 'vortex_rings';
     const ringRadii = [0.98, 1.28, 1.62];
@@ -421,15 +598,8 @@ export class SceneRenderer {
       ringGroup.add(ring);
     }
 
-    // Suspended black-liquid droplets around the aperture
     const dropGeo = new THREE.SphereGeometry(0.055, 12, 12);
-    const dropMat = new THREE.MeshStandardMaterial({
-      color: 0x050914,
-      emissive: 0x38bdf8,
-      emissiveIntensity: 0.4,
-      roughness: 0.1,
-      metalness: 0.95,
-    });
+    const dropMat = new THREE.MeshStandardMaterial({ color: 0x050914, emissive: 0x38bdf8, emissiveIntensity: 0.4, roughness: 0.1, metalness: 0.95 });
     for (let i = 0; i < 18; i++) {
       const a = (i / 18) * Math.PI * 2;
       const r = 1.15 + (i % 3) * 0.28;
@@ -445,7 +615,7 @@ export class SceneRenderer {
   buildSourceLayerVisual(group, obj) {
     let tex = this.textureCache.get(obj.layerDataUrl);
     if (!tex) {
-      tex = new THREE.TextureLoader().load(obj.layerDataUrl);
+      tex = new THREE.TextureLoader().load(obj.layerDataUrl, () => this.markDirty());
       tex.colorSpace = THREE.SRGBColorSpace;
       this.textureCache.set(obj.layerDataUrl, tex);
     }
@@ -453,39 +623,25 @@ export class SceneRenderer {
     const h = 1.8;
     const w = h * aspect;
     const geo = new THREE.PlaneGeometry(w, h);
-    const mat = new THREE.MeshStandardMaterial({
-      map: tex,
-      transparent: true,
-      alphaTest: 0.05,
-      side: THREE.DoubleSide,
-      roughness: 0.65,
-      metalness: 0.08,
-    });
+    const mat = new THREE.MeshStandardMaterial({ map: tex, transparent: true, alphaTest: 0.05, side: THREE.DoubleSide, roughness: 0.65, metalness: 0.08 });
     const mesh = new THREE.Mesh(geo, mat);
     mesh.castShadow = true;
     group.add(mesh);
   }
 
   async loadGlbGroup(assetId) {
-    if (this.loadedAssetCache.has(assetId)) {
-      return this.loadedAssetCache.get(assetId).clone(true);
-    }
+    if (this.loadedAssetCache.has(assetId)) return this.loadedAssetCache.get(assetId).clone(true);
     const bytes = this.assetManager.getBytes(this.projectDoc, assetId);
     if (!bytes) return null;
-
     const ab = bytes.buffer.slice(bytes.byteOffset, bytes.byteOffset + bytes.byteLength);
     try {
-      const gltf = await new Promise((resolve, reject) => {
-        this.gltfLoader.parse(ab, '', resolve, reject);
-      });
+      const gltf = await new Promise((resolve, reject) => this.gltfLoader.parse(ab, '', resolve, reject));
       const root = gltf.scene || new THREE.Group();
       root.traverse((child) => {
         if (child.isMesh) {
           child.castShadow = true;
           child.receiveShadow = true;
-          if (child.geometry?.attributes?.color && child.material) {
-            child.material.vertexColors = true;
-          }
+          if (child.geometry?.attributes?.color && child.material) child.material.vertexColors = true;
         }
       });
       this.loadedAssetCache.set(assetId, root);
@@ -498,14 +654,11 @@ export class SceneRenderer {
   buildProceduralVisual(group, obj) {
     const col = obj.collision || { shape: 'sphere', radius: 0.4 };
     let geo;
-    if (col.shape === 'capsule') {
-      geo = new THREE.CapsuleGeometry(col.radius || 0.4, (col.halfHeight || 0.5) * 2, 8, 16);
-    } else if (col.shape === 'box') {
+    if (col.shape === 'capsule') geo = new THREE.CapsuleGeometry(col.radius || 0.4, (col.halfHeight || 0.5) * 2, 8, 16);
+    else if (col.shape === 'box') {
       const [hx, hy, hz] = col.halfExtents || [0.35, 0.35, 0.35];
       geo = new THREE.BoxGeometry(hx * 2, hy * 2, hz * 2);
-    } else {
-      geo = new THREE.IcosahedronGeometry(col.radius || 0.32, 1);
-    }
+    } else geo = new THREE.IcosahedronGeometry(col.radius || 0.32, 1);
     const mat = new THREE.MeshStandardMaterial({
       color: new THREE.Color(obj.material?.color || '#38bdf8'),
       emissive: new THREE.Color(obj.material?.emissive || '#000000'),
@@ -525,39 +678,113 @@ export class SceneRenderer {
     if (col.shape === 'box') {
       const [hx, hy, hz] = col.halfExtents || [0.35, 0.35, 0.35];
       geo = new THREE.BoxGeometry(hx * 2, hy * 2, hz * 2);
-    } else if (col.shape === 'capsule') {
-      geo = new THREE.CapsuleGeometry(col.radius || 0.4, (col.halfHeight || 0.5) * 2, 4, 8);
-    } else {
-      geo = new THREE.SphereGeometry(col.radius || 0.4, 12, 8);
-    }
+    } else if (col.shape === 'capsule') geo = new THREE.CapsuleGeometry(col.radius || 0.4, (col.halfHeight || 0.5) * 2, 4, 8);
+    else geo = new THREE.SphereGeometry(col.radius || 0.4, 12, 8);
     const mesh = new THREE.Mesh(geo, this.collisionWireMat);
     mesh.userData.isCollisionHelper = true;
     return mesh;
   }
 
-  syncObjectTransform(obj, group) {
-    group.position.set(obj.position[0], obj.position[1], obj.position[2]);
-    group.rotation.set(obj.rotation[0], obj.rotation[1], obj.rotation[2]);
+  syncObjectTransform(obj, group, pos, rot) {
+    group.position.set(pos[0], pos[1], pos[2]);
+    group.rotation.set(rot[0], rot[1], rot[2]);
     group.scale.set(obj.scale[0], obj.scale[1], obj.scale[2]);
   }
 
-  syncFromSimulation(dt = 0) {
-    if (!this.sceneDoc) return;
-    for (const obj of this.sceneDoc.objects) {
-      const group = this.objectMeshes.get(obj.id);
-      if (!group) continue;
-      this.syncObjectTransform(obj, group);
+  updateTrail(obj, pos) {
+    if (this.qualityTier === 'economy' || this.reducedMotion || isTemporallyFrozen(obj.temporalState)) return;
+    const speed = Math.hypot(obj.velocity[0], obj.velocity[1], obj.velocity[2]);
+    if (speed < 1.2) return;
 
-      // Vortex internal ring motion strictly obeys temporalState
-      if (obj.isVortex) {
-        const rings = group.getObjectByName('vortex_rings');
-        if (rings && !isTemporallyFrozen(obj.temporalState) && !this.reducedMotion) {
-          rings.rotation.z += dt * 1.1;
-          rings.rotation.y += dt * 0.65;
+    const MAX_PTS = 14;
+    let t = this.trailMap.get(obj.id);
+    if (!t) {
+      if (this.trailMap.size >= 24) return; // Bounded trail pool
+      const positions = new Float32Array(MAX_PTS * 3);
+      for (let i = 0; i < MAX_PTS; i++) {
+        positions[i * 3] = pos[0];
+        positions[i * 3 + 1] = pos[1];
+        positions[i * 3 + 2] = pos[2];
+      }
+      const geo = new THREE.BufferGeometry();
+      geo.setAttribute('position', new THREE.BufferAttribute(positions, 3));
+      const mat = new THREE.LineBasicMaterial({ color: obj.material?.color || 0x38bdf8, transparent: true, opacity: 0.55 });
+      const line = new THREE.Line(geo, mat);
+      this.trailRoot.add(line);
+      t = { line, positions };
+      this.trailMap.set(obj.id, t);
+    }
+    // Shift ring buffer
+    for (let i = MAX_PTS - 1; i > 0; i--) {
+      t.positions[i * 3] = t.positions[(i - 1) * 3];
+      t.positions[i * 3 + 1] = t.positions[(i - 1) * 3 + 1];
+      t.positions[i * 3 + 2] = t.positions[(i - 1) * 3 + 2];
+    }
+    t.positions[0] = pos[0];
+    t.positions[1] = pos[1];
+    t.positions[2] = pos[2];
+    t.line.geometry.attributes.position.needsUpdate = true;
+  }
+
+  /**
+   * Syncs renderer from canonical scene state with (#18) render-state interpolation,
+   * (#17) temporal-gated vortex shader time, (#24) instanced batch updates, and (#19) dirty detection.
+   */
+  syncFromSimulation(dt = 0, simEngine = null) {
+    if (!this.sceneDoc) return false;
+    let anyActive = false;
+
+    for (const obj of this.sceneDoc.objects) {
+      const isActive = obj.temporalState === 'active';
+      if (isActive) anyActive = true;
+
+      const xform = simEngine ? simEngine.getInterpolatedTransform(obj) : { position: obj.position, rotation: obj.rotation };
+
+      // (#24) Instanced fragment update
+      const instRef = this.instancedObjectMap.get(obj.id);
+      if (instRef) {
+        const batch = this.instancedBatches.get(instRef.shapeKey);
+        if (batch) {
+          const vis = obj.visible !== false && (!this.isolatedObjectId || this.isolatedObjectId === obj.id);
+          const r = obj.collision?.shape === 'box'
+            ? (obj.collision.halfExtents?.[0] ?? 0.2)
+            : (obj.collision?.radius ?? 0.2);
+          this._dummy.position.set(xform.position[0], xform.position[1], xform.position[2]);
+          this._dummy.rotation.set(xform.rotation[0], xform.rotation[1], xform.rotation[2]);
+          this._dummy.scale.set(
+            vis ? r * (obj.scale?.[0] ?? 1) : 0,
+            vis ? r * (obj.scale?.[1] ?? 1) : 0,
+            vis ? r * (obj.scale?.[2] ?? 1) : 0
+          );
+          this._dummy.updateMatrix();
+          batch.mesh.setMatrixAt(instRef.index, this._dummy.matrix);
+          batch.mesh.instanceMatrix.needsUpdate = true;
         }
+        if (isActive) this.updateTrail(obj, xform.position);
+        continue;
       }
 
-      // Subtle visual distinction between frozen and active in shaded mode
+      const group = this.objectMeshes.get(obj.id);
+      if (!group) continue;
+      if (!this.gizmo.dragging || this.gizmo.object !== group) {
+        this.syncObjectTransform(obj, group, xform.position, xform.rotation);
+      }
+
+      if (obj.isVortex) {
+        const activeNow = !isTemporallyFrozen(obj.temporalState);
+        this.vortexShaderMat.uniforms.uActive.value = activeNow ? 1.0 : 0.0;
+        if (activeNow && !this.reducedMotion) {
+          this.vortexShaderMat.uniforms.uTime.value += dt;
+          const rings = group.getObjectByName('vortex_rings');
+          if (rings) {
+            rings.rotation.z += dt * 1.1;
+            rings.rotation.y += dt * 0.65;
+          }
+        }
+      } else if (isActive) {
+        this.updateTrail(obj, xform.position);
+      }
+
       if (this.inspectionMode === 'shaded' && !obj.isVortex) {
         const isFrozen = isTemporallyFrozen(obj.temporalState);
         group.traverse((child) => {
@@ -568,9 +795,10 @@ export class SceneRenderer {
       }
     }
 
-    // Update bounded ripple pool
+    let anyRipples = false;
     for (const slot of this.ripplePool) {
       if (!slot.active) continue;
+      anyRipples = true;
       slot.age += dt;
       if (slot.age >= slot.maxAge) {
         slot.active = false;
@@ -582,6 +810,10 @@ export class SceneRenderer {
         slot.mesh.lookAt(this.camera.position);
       }
     }
+
+    if (anyActive || anyRipples) this.markDirty();
+    this.updateSelectionRing();
+    return anyActive || anyRipples;
   }
 
   applyCameraPose(pose) {
@@ -593,6 +825,7 @@ export class SceneRenderer {
     if (pose.position) this.camera.position.set(pose.position[0], pose.position[1], pose.position[2]);
     if (pose.target) this.controls.target.set(pose.target[0], pose.target[1], pose.target[2]);
     this.controls.update();
+    this.markDirty();
   }
 
   focusObject(objectId) {
@@ -601,6 +834,7 @@ export class SceneRenderer {
     this.controls.target.set(obj.position[0], obj.position[1], obj.position[2]);
     this.camera.position.set(obj.position[0] + 2.4, obj.position[1] + 1.2, obj.position[2] + 3.2);
     this.controls.update();
+    this.markDirty();
   }
 
   getCameraPose() {
@@ -617,11 +851,22 @@ export class SceneRenderer {
     this.camera.aspect = w / h;
     this.camera.updateProjectionMatrix();
     this.renderer.setSize(w, h);
+    this.markDirty();
   }
 
-  renderFrame() {
-    this.controls.update();
+  /**
+   * (#19) On-demand idle rendering: skips WebGL draw pass when completely static.
+   */
+  renderFrame(force = false) {
+    const controlsMoved = this.controls.update();
+    if (!force && !this.dirty && !this.cameraMoving && !controlsMoved) {
+      this.idleFramesSkipped++;
+      return false;
+    }
     this.renderer.render(this.threeScene, this.camera);
+    this.framesRendered++;
+    this.dirty = false;
+    return true;
   }
 
   getTelemetry() {
@@ -633,11 +878,15 @@ export class SceneRenderer {
       textures: info.memory.textures,
       qualityTier: this.qualityTier,
       inspectionMode: this.inspectionMode,
-      objectCount: this.objectMeshes.size,
+      objectCount: this.sceneDoc?.objects?.length || 0,
+      instancedCount: this.instancedObjectMap.size,
+      idleFramesSkipped: this.idleFramesSkipped,
+      framesRendered: this.framesRendered,
     };
   }
 
   dispose() {
+    this.gizmo.dispose();
     this.controls.dispose();
     this.renderer.dispose();
     for (const tex of this.textureCache.values()) tex.dispose();

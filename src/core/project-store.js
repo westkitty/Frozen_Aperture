@@ -6,13 +6,88 @@
 
 import { migrateProject, validateProject, SCHEMA_VERSION } from './schema.js';
 import { RESOURCE_LIMITS } from './security.js';
+import { IndexedDbAssetStore } from './idb-store.js';
 
 const STORAGE_PREFIX = 'frozen_aperture_project_v1:';
 const INDEX_KEY = 'frozen_aperture_index_v1';
 
 export class ProjectStore {
-  constructor(storage = null) {
+  constructor(storage = null, idbStore = null) {
     this.storage = storage || (typeof globalThis.localStorage !== 'undefined' ? globalThis.localStorage : null);
+    this.idb = idbStore || new IndexedDbAssetStore();
+  }
+
+  async saveProjectAsync(doc, assetManager = null, { bumpRevision = true } = {}) {
+    const check = validateProject(doc);
+    if (!check.valid) throw new Error(`Cannot save invalid project: ${check.errors.join('; ')}`);
+    if (bumpRevision) doc.project.revision = (doc.project.revision || 0) + 1;
+    doc.project.modifiedAt = new Date().toISOString();
+
+    // Persist large binary assets content-addressed by SHA-256 in IndexedDB
+    let blobsStored = 0;
+    const strippedDoc = JSON.parse(JSON.stringify(doc));
+    if (assetManager) {
+      for (const a of strippedDoc.assets || []) {
+        const bytes = assetManager.getBytes(doc, a.id);
+        if (bytes && a.sha256) {
+          await this.idb.putBlob(a.sha256, bytes, 'model/gltf-binary');
+          a.storedInIdb = true;
+          if (bytes.byteLength > 256 * 1024) a.embeddedBase64 = null;
+          blobsStored++;
+        }
+      }
+    }
+
+    const idbRes = await this.idb.putProject(strippedDoc);
+    // Also mirror lightweight metadata in localStorage if small enough
+    if (this.storage) {
+      try {
+        this.saveProject(strippedDoc, { bumpRevision: false });
+      } catch (_) {
+        // Ignore localStorage quota exceeded when IndexedDB succeeded
+      }
+    }
+
+    return {
+      saved: idbRes.persisted || Boolean(this.storage),
+      storageMode: idbRes.persisted ? 'indexeddb' : (this.storage ? 'browser_local_storage' : 'memory_only'),
+      revision: doc.project.revision,
+      blobsStored,
+      message: idbRes.persisted
+        ? `Saved revision ${doc.project.revision} to IndexedDB (${blobsStored} binary assets content-addressed).`
+        : `Saved revision ${doc.project.revision} (${idbRes.backend}).`,
+    };
+  }
+
+  async loadProjectAsync(projectId, assetManager = null) {
+    let rawDoc = await this.idb.getProject(projectId);
+    if (!rawDoc && this.storage) {
+      const res = this.loadProjectById(projectId);
+      rawDoc = res.project;
+    }
+    if (!rawDoc) throw new Error(`Saved project not found: ${projectId}`);
+    const migrated = migrateProject(rawDoc);
+    const check = validateProject(migrated);
+    if (!check.valid) throw new Error(`Project validation failed: ${check.errors.join('; ')}`);
+
+    // Hydrate binary GLBs from IndexedDB into AssetManager
+    if (assetManager) {
+      for (const a of migrated.assets || []) {
+        if (a.sha256 && !assetManager.binaryStore.has(a.id)) {
+          const bytes = await this.idb.getBlob(a.sha256);
+          if (bytes) assetManager.binaryStore.set(a.id, bytes);
+        }
+      }
+    }
+    return { project: migrated, warnings: check.warnings };
+  }
+
+  async listSavedAsync() {
+    const idbList = await this.idb.listProjects();
+    const lsList = this.listSaved();
+    const byId = new Map();
+    for (const item of [...lsList, ...idbList]) byId.set(item.id, item);
+    return Array.from(byId.values()).sort((a, b) => String(b.modifiedAt || '').localeCompare(String(a.modifiedAt || '')));
   }
 
   hasPersistentBrowserStorage() {

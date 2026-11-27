@@ -25,6 +25,11 @@ import { ManualGlbProvider, DexDiffusionAdapter } from '../src/providers/dexdiff
 import { TemporalSimulationEngine } from '../src/simulation/temporal-engine.js';
 import { createPublicCalibrationProject } from '../src/fixtures/calibration-scene.js';
 import { buildStandaloneHtmlExport } from '../src/export/offline-exporter.js';
+import { exportProjectZipBundle, importProjectZipBundle, buildZipArchive, parseZipArchive } from '../src/export/zip-bundle.js';
+import { solveCameraFromLandmarks, projectWorldPoint } from '../src/source/camera-calibrator.js';
+import { computeMaskIoU } from '../src/render/silhouette-iou.js';
+import { inpaintBackgroundBuffer } from '../src/source/background-plate.js';
+import { computeSweptSphereTOI, narrowphaseContact, getBodyAabb } from '../src/simulation/collision.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const root = path.resolve(__dirname, '..');
@@ -337,6 +342,218 @@ async function run() {
     } finally {
       fs.rmSync(tmpDir, { recursive: true, force: true });
     }
+  });
+
+  await test('14. Portable .fap.zip bundle roundtrips deduplicated GLBs and rejects path traversal (#22)', async () => {
+    const am = new AssetManager();
+    const project = await createPublicCalibrationProject(am);
+    const zipBytes = exportProjectZipBundle(project, am);
+    assert.ok(zipBytes.byteLength > 1000);
+
+    const am2 = new AssetManager();
+    const imported = importProjectZipBundle(zipBytes, am2);
+    assert.equal(imported.project.project.id, project.project.id);
+    assert.ok(imported.entryCount >= 3, 'Should contain project.json + deduplicated GLB assets');
+    for (const a of imported.project.assets) {
+      assert.ok(am2.getBytes(imported.project, a.id), `Restored binary missing for ${a.id}`);
+    }
+
+    // Must reject path traversal in ZIP entries
+    assert.throws(() => buildZipArchive([{ name: '../evil.txt', data: new Uint8Array([1, 2, 3]) }]));
+  });
+
+  await test('15. Multi-component asset slots (#9) and auto-fit collision proxy (#13) preserve object identity', async () => {
+    const am = new AssetManager();
+    const project = await createPublicCalibrationProject(am);
+    const scene = getActiveScene(project);
+    const targetObj = scene.objects.find(o => o.id === 'obj_fig_02_emerald');
+    const [assetA, assetB] = project.assets;
+
+    am.bindComponentSlot(project, scene, targetObj.id, 'body', assetA.id);
+    am.bindComponentSlot(project, scene, targetObj.id, 'weapon', assetB.id, { localPosition: [0.4, 0.2, 0] });
+    assert.equal(targetObj.components.body.assetId, assetA.id);
+    assert.equal(targetObj.components.weapon.assetId, assetB.id);
+
+    am.revertComponentSlot(scene, targetObj.id);
+    assert.equal(targetObj.components.weapon, undefined);
+    assert.equal(targetObj.components.body.assetId, assetA.id);
+
+    const col = am.fitCollisionProxyFromAsset(project, targetObj, assetA.id, 'capsule');
+    assert.equal(col.shape, 'capsule');
+    assert.equal(col.fittedFromAssetId, assetA.id);
+    assert.ok(col.radius > 0.3 && col.radius < 1.0);
+  });
+
+  await test('16. Source-camera landmark calibration solver reduces pixel reprojection RMSE (#3)', () => {
+    const trueCam = { position: [0.4, 2.0, 11.8], target: [0, 1.4, 0], fovDeg: 42, imageWidth: 1200, imageHeight: 750 };
+    const worldPts = [[-3, 1.3, 1.5], [3, 1.3, 1.5], [0, 2.4, 0], [-2, 1.4, -2]];
+    const landmarks = worldPts.map(w => {
+      const p = projectWorldPoint(w, trueCam);
+      return { world3D: w, pixel2D: [p.x, p.y] };
+    });
+    const perturbed = { ...trueCam, position: [1.5, 2.8, 14.0], fovDeg: 52 };
+    const solved = solveCameraFromLandmarks(perturbed, landmarks, { iterations: 40 });
+    assert.ok(solved.finalRmsePx < solved.initialRmsePx, `Expected RMSE to decrease (${solved.initialRmsePx} -> ${solved.finalRmsePx})`);
+    assert.ok(solved.finalRmsePx < 15, `Expected low final RMSE, got ${solved.finalRmsePx}`);
+  });
+
+  await test('17. Silhouette IoU (#4) and Disocclusion Background Plate Inpainting (#5)', () => {
+    const mA = new Uint8Array([1, 1, 0, 0]);
+    const mB = new Uint8Array([1, 0, 1, 0]);
+    const iouRes = computeMaskIoU(mA, mB, 2, 2);
+    assert.equal(iouRes.intersectionPixels, 1);
+    assert.equal(iouRes.unionPixels, 3);
+    assert.ok(Math.abs(iouRes.iou - 1 / 3) < 0.001);
+
+    // 4x4 dark-blue background with a 2x2 masked foreground hole in the center
+    const w = 4, h = 4;
+    const rgba = new Uint8ClampedArray(w * h * 4);
+    const hole = new Uint8Array(w * h);
+    for (let y = 0; y < h; y++) {
+      for (let x = 0; x < w; x++) {
+        const i = y * w + x;
+        const isHole = x >= 1 && x <= 2 && y >= 1 && y <= 2;
+        hole[i] = isHole ? 1 : 0;
+        rgba[i * 4] = isHole ? 255 : 20;
+        rgba[i * 4 + 1] = isHole ? 0 : 40;
+        rgba[i * 4 + 2] = isHole ? 0 : 80;
+        rgba[i * 4 + 3] = 255;
+      }
+    }
+    const bg = inpaintBackgroundBuffer(rgba, w, h, hole, { iterations: 6 });
+    assert.equal(bg.inpaintedPixels, 4);
+    assert.equal(bg.rgba[(1 * w + 1) * 4], 20, 'Center hole pixel should be diffused from border background');
+    assert.ok(bg.meanConfidence > 0.7 && bg.meanConfidence < 1.0);
+  });
+
+  await test('18. Swept CCD anti-tunneling (#11), rotated OBB & compound proxies (#12), and sleeping (#14)', () => {
+    // Swept CCD catches high-speed projectile crossing target in single tick
+    const toi = computeSweptSphereTOI([-5, 0, 0], [300, 0, 0], 0.2, [0, 0, 0], [0, 0, 0], 0.2, 1 / 60);
+    assert.ok(toi !== null && toi > 0 && toi < 1, `Expected swept TOI in (0,1), got ${toi}`);
+
+    // Rotated OBB SAT detects overlap accurately
+    const boxA = { id: 'a', position: [0, 0, 0], rotation: [0, Math.PI / 4, 0], scale: [1, 1, 1], collision: { shape: 'box', halfExtents: [0.5, 0.5, 0.5] } };
+    const boxB = { id: 'b', position: [1.1, 0, 0], rotation: [0, 0, 0], scale: [1, 1, 1], collision: { shape: 'box', halfExtents: [0.5, 0.5, 0.5] } };
+    const obbHit = narrowphaseContact(boxA, boxB, getBodyAabb(boxA), getBodyAabb(boxB));
+    assert.ok(obbHit !== null && obbHit.depth > 0, 'Rotated 45-deg box corner should contact boxB at x=1.1');
+
+    // Compound multi-primitive proxy
+    const comp = {
+      id: 'c', position: [0, 0, 0], rotation: [0, 0, 0], scale: [1, 1, 1],
+      collision: { shape: 'compound_convex', primitives: [{ shape: 'sphere', radius: 0.3, offset: [0, 1.0, 0] }] },
+    };
+    const probe = { id: 'p', position: [0, 1.2, 0], rotation: [0, 0, 0], scale: [1, 1, 1], collision: { shape: 'sphere', radius: 0.2 } };
+    assert.ok(narrowphaseContact(comp, probe, getBodyAabb(comp), getBodyAabb(probe)) !== null);
+
+    // Settled body transitions to sleeping (#14)
+    const doc = JSON.parse(JSON.stringify(fixA));
+    const scene = getActiveScene(doc);
+    scene.simulation.gravity = [0, -9.81, 0];
+    scene.objects = [{
+      id: 'sleeper', label: 'Sleeper', position: [0, 0.51, 0], rotation: [0, 0, 0], scale: [1, 1, 1],
+      temporalState: 'active', velocity: [0, 0, 0], angularVelocity: [0, 0, 0],
+      collision: { shape: 'sphere', radius: 0.5, enabled: true }, physics: { mass: 1, restitution: 0.1, gravityScale: 1 }, visible: true,
+    }];
+    const sim = new TemporalSimulationEngine(scene);
+    for (let i = 0; i < 65; i++) sim.stepFixed();
+    assert.equal(sim.getObject('sleeper').temporalState, 'sleeping');
+  });
+
+  await test('19. DexDiffusion live polling, GLB auto-download (#6), and World/SHARP probe (#7)', async () => {
+    const am = new AssetManager();
+    const project = await createPublicCalibrationProject(am);
+    const glbBytes = createOctahedronGlb({ name: 'MockDexOutput' });
+    let pollCount = 0;
+
+    const mockFetch = async (url) => {
+      if (url.endsWith('/api/3d/workers')) {
+        return { ok: true, json: async () => ({ modes: { mesh: { installed: true, proven: true } } }) };
+      }
+      if (url.endsWith('/api/3d/jobs')) {
+        return { ok: true, json: async () => ({ jobId: 'remote_job_42' }) };
+      }
+      if (url.endsWith('/api/jobs/remote_job_42')) {
+        pollCount++;
+        return {
+          ok: true,
+          json: async () => pollCount < 2
+            ? { status: 'RUNNING', progress: { progress: 50, label: 'Denoising' } }
+            : { status: 'DONE', outputMediaId: 'media_99' },
+        };
+      }
+      if (url.endsWith('/api/media/media_99/download')) {
+        return { ok: true, arrayBuffer: async () => glbBytes.buffer.slice(glbBytes.byteOffset, glbBytes.byteOffset + glbBytes.byteLength) };
+      }
+      if (url.endsWith('/api/world/workers')) {
+        return { ok: true, json: async () => ({ sharp: { installed: true } }) };
+      }
+      return { ok: false, status: 404 };
+    };
+
+    const dex = new DexDiffusionAdapter({ baseUrl: 'http://mock-bigmac.local:8787', fetchImpl: mockFetch });
+    const worldProbe = await dex.probeWorldWorkers();
+    assert.equal(worldProbe.available, true);
+    assert.equal(worldProbe.collisionReady, false);
+
+    const reg = new ProviderRegistry();
+    reg.register(dex);
+    const receipt = await reg.submitJob(project, {
+      providerId: 'dexdiffusion_local',
+      mode: 'mesh',
+      operatorInitiated: true,
+      input: {
+        sourceArtifactId: 'img_001',
+        pollUntilComplete: true,
+        pollIntervalMs: 5,
+        project,
+        assetManager: am,
+      },
+    });
+    assert.equal(receipt.state, 'completed');
+    assert.ok(receipt.outputAssetId, 'Auto-downloaded GLB must be registered');
+  });
+
+  await test('20. Multi-body manifest CLI mode (scripts/build.py --manifest) verifies per-asset SHA-256 (#15)', async () => {
+    const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'fa-manifest-'));
+    try {
+      const glb1 = createCalibrationSolidGlb({ name: 'ManifestBody1' });
+      const glb2 = createOctahedronGlb({ name: 'ManifestBody2' });
+      fs.writeFileSync(path.join(tmpDir, 'b1.glb'), glb1);
+      fs.writeFileSync(path.join(tmpDir, 'b2.glb'), glb2);
+      const sha1 = await sha256Hex(glb1);
+      const sha2 = await sha256Hex(glb2);
+
+      const manifest = {
+        id: 'proj_manifest_test',
+        name: 'Multi-Body Manifest Test',
+        objects: [
+          { id: 'fig_1', label: 'Figure 1', glb: 'b1.glb', expectedSha256: sha1, position: [-1, 1, 0] },
+          { id: 'fig_2', label: 'Figure 2', glb: 'b2.glb', expectedSha256: sha2, position: [1, 1, 0] },
+        ],
+      };
+      const manifestPath = path.join(tmpDir, 'manifest.json');
+      const outPath = path.join(tmpDir, 'manifest-out.local.html');
+      fs.writeFileSync(manifestPath, JSON.stringify(manifest));
+
+      execFileSync('python3', [path.join(root, 'scripts/build.py'), '--manifest', manifestPath, '--output', outPath], { stdio: 'pipe' });
+      const html = fs.readFileSync(outPath, 'utf8');
+      assert.ok(html.includes(sha1) && html.includes(sha2));
+    } finally {
+      fs.rmSync(tmpDir, { recursive: true, force: true });
+    }
+  });
+
+  await test('21. Async ProjectStore (IndexedDB / memory fallback) persists & hydrates binary assets (#21)', async () => {
+    const store = new ProjectStore(null);
+    const am = new AssetManager();
+    const project = await createPublicCalibrationProject(am);
+    const saveRes = await store.saveProjectAsync(project, am);
+    assert.ok(saveRes.blobsStored >= 2);
+
+    const am2 = new AssetManager();
+    const loaded = await store.loadProjectAsync(project.project.id, am2);
+    assert.equal(loaded.project.project.id, project.project.id);
+    assert.ok(am2.getBytes(loaded.project, loaded.project.assets[0].id));
   });
 
   const failed = results.filter(r => !r.passed);

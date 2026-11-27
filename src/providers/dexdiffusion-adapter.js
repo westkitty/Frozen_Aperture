@@ -181,11 +181,122 @@ export class DexDiffusionAdapter {
     const created = await res.json();
     receipt.remoteJobId = created.jobId || created.id || null;
     receipt.message = `Submitted to DexDiffusion (remote job ${receipt.remoteJobId || 'pending'}).`;
+
+    // Optional live polling + auto-download & validation (#6)
+    if (input.pollUntilComplete && receipt.remoteJobId) {
+      const finalJob = await this.pollJob(receipt.remoteJobId, {
+        intervalMs: input.pollIntervalMs ?? 1500,
+        timeoutMs: input.pollTimeoutMs ?? 300000,
+        onProgress: (p) => {
+          if (typeof p.progress === 'number') receipt.progress = p.progress;
+          if (p.label) receipt.message = p.label;
+        },
+      });
+      if (finalJob.status === 'FAILED' || finalJob.status === 'CANCELLED') {
+        throw new Error(`DexDiffusion remote job ${finalJob.status}: ${finalJob.error || 'see remote log'}`);
+      }
+      const mediaId = finalJob.outputMediaId || finalJob.artifactId || finalJob.mediaId;
+      if (mediaId && input.assetManager && input.project) {
+        const reg = await this.downloadAndRegisterGlb(mediaId, {
+          project: input.project,
+          assetManager: input.assetManager,
+          sourceObjectId: input.sourceObjectId || null,
+          label: input.label || `DexDiffusion ${mode} (${mediaId})`,
+        });
+        return {
+          assetId: reg.asset.id,
+          message: `Downloaded & validated DexDiffusion GLB (${reg.asset.id}).`,
+          reproducibility: { remoteJobId: receipt.remoteJobId, mediaId, sha256: reg.asset.sha256, mode, endpoint: this.baseUrl },
+        };
+      }
+    }
+
     return {
       assetId: null,
       message: receipt.message,
       reproducibility: { remoteJobId: receipt.remoteJobId, mode, endpoint: this.baseUrl },
     };
+  }
+
+  /**
+   * Polls GET /api/jobs/:jobId until terminal state (DONE/COMPLETED/FAILED/CANCELLED) (#6).
+   */
+  async pollJob(remoteJobId, { intervalMs = 1500, timeoutMs = 300000, onProgress = null } = {}) {
+    if (!this.baseUrl || !this.fetchImpl) throw new Error('DexDiffusion endpoint not configured.');
+    const deadline = Date.now() + timeoutMs;
+    while (Date.now() < deadline) {
+      const res = await this.fetchImpl(`${this.baseUrl}/api/jobs/${encodeURIComponent(remoteJobId)}`, {
+        method: 'GET',
+        headers: { Accept: 'application/json' },
+      });
+      if (!res.ok) throw new Error(`Job poll HTTP ${res.status}`);
+      const job = await res.json();
+      if (onProgress && job.progress) onProgress(job.progress);
+      const st = String(job.status || job.state || '').toUpperCase();
+      if (['DONE', 'COMPLETED', 'SUCCEEDED', 'FAILED', 'ERROR', 'CANCELLED', 'CANCELED'].includes(st)) {
+        return { ...job, status: st };
+      }
+      await new Promise(r => setTimeout(r, intervalMs));
+    }
+    throw new Error(`DexDiffusion job ${remoteJobId} polling timed out after ${timeoutMs}ms.`);
+  }
+
+  /**
+   * Downloads a completed GLB via GET /api/media/:id/download and runs full structural validation (#6).
+   */
+  async downloadAndRegisterGlb(mediaId, { project, assetManager, sourceObjectId = null, label = 'DexDiffusion GLB' }) {
+    if (!this.baseUrl || !this.fetchImpl) throw new Error('DexDiffusion endpoint not configured.');
+    const res = await this.fetchImpl(`${this.baseUrl}/api/media/${encodeURIComponent(mediaId)}/download`);
+    if (!res.ok) throw new Error(`Media download failed (HTTP ${res.status}).`);
+    const bytes = new Uint8Array(await res.arrayBuffer());
+    const result = await assetManager.registerGlbAsset(project, {
+      bytes,
+      label,
+      sourceObjectId,
+      provider: this.id,
+      model: 'hunyuan3d-swift',
+      rights: 'private_generated',
+      surfaceClassification: 'inferred',
+      notes: `Auto-downloaded from DexDiffusion media ${mediaId}.`,
+    });
+    if (!result.validation.valid) {
+      throw new Error(`Downloaded DexDiffusion GLB failed validation: ${result.validation.errors.join('; ')}`);
+    }
+    return result;
+  }
+
+  /**
+   * Probes GET /api/world/workers (Apple SHARP / panorama / spatial world compilation) (#7).
+   */
+  async probeWorldWorkers() {
+    if (!this.baseUrl || !this.fetchImpl) {
+      return { available: false, state: 'unconfigured', reason: 'DexDiffusion endpoint not configured.' };
+    }
+    try {
+      const res = await this.fetchImpl(`${this.baseUrl}/api/world/workers`, { headers: { Accept: 'application/json' } });
+      if (!res.ok) return { available: false, state: 'unavailable', reason: `HTTP ${res.status}` };
+      const data = await res.json();
+      return { available: true, state: 'ready', collisionReady: false, representationType: 'background_representation', workers: data };
+    } catch (err) {
+      return { available: false, state: 'unreachable', reason: err.message };
+    }
+  }
+
+  /**
+   * Submits a World/SHARP background reconstruction project via POST /api/world/projects (#7).
+   * Explicitly tags output as non-collision background_representation.
+   */
+  async submitWorldProject({ sourceArtifactId, mode = 'quick3d', parameters = {} }) {
+    if (!this.baseUrl || !this.fetchImpl) throw new Error('DexDiffusion endpoint not configured.');
+    if (!sourceArtifactId) throw new Error('sourceArtifactId is required for /api/world/projects.');
+    const res = await this.fetchImpl(`${this.baseUrl}/api/world/projects`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', Accept: 'application/json' },
+      body: JSON.stringify({ mode, sourceArtifactId, parameters, save_prompts: false }),
+    });
+    if (!res.ok) throw new Error(`World project submission failed (HTTP ${res.status}).`);
+    const data = await res.json();
+    return { ...data, representationType: 'background_representation', collisionReady: false };
   }
 
   async cancelJob(_jobId, receipt) {

@@ -9,6 +9,7 @@ import { getActiveScene, validateProject, EXPERIENCE_MODES, ASSET_LIFECYCLE_STAT
 import { ProjectStore } from './core/project-store.js';
 import { escapeHtml, sanitizeFilename, sanitizeLabel } from './core/security.js';
 import { AssetManager } from './assets/asset-manager.js';
+import { bakeSourceVertexColors } from './assets/vertex-color-baker.js';
 import { ProviderRegistry } from './providers/provider-interface.js';
 import { ManualGlbProvider, DexDiffusionAdapter } from './providers/dexdiffusion-adapter.js';
 import { TemporalSimulationEngine } from './simulation/temporal-engine.js';
@@ -16,8 +17,12 @@ import { SceneRenderer } from './render/scene-renderer.js';
 import { SpatialAudioEngine } from './render/audio-engine.js';
 import { ingestImageFile, createSyntheticTestIllustration } from './source/image-ingestor.js';
 import { SegmentationWorkbench } from './source/segmentation-canvas.js';
+import { solveCameraFromLandmarks } from './source/camera-calibrator.js';
+import { generateBackgroundPlateFromSource } from './source/background-plate.js';
+import { evaluateCanvasSilhouetteIoU } from './render/silhouette-iou.js';
 import { createPublicCalibrationProject } from './fixtures/calibration-scene.js';
 import { buildStandaloneHtmlExport } from './export/offline-exporter.js';
+import { exportProjectZipBundle, importProjectZipBundle } from './export/zip-bundle.js';
 
 const WORKFLOW_STAGES = [
   { id: 'source', label: 'Source' },
@@ -52,6 +57,9 @@ class FrozenApertureApp {
     this.selectedObjectId = null;
     this.selectedSourceObjId = null;
     this.referenceOverlayOpacity = 0;
+    this.gizmoMode = 'off'; // off | translate | rotate | scale
+    this.gizmoSnap = false;
+    this.lastIouResult = null;
     this.providerStatuses = [];
     this.lastFrameTime = 0;
     this.frameTimes = [];
@@ -80,6 +88,10 @@ class FrozenApertureApp {
         if (this.workbenchOpen) this.renderSidebar();
       },
       onObjectTap: (id) => this.handleViewportObjectTap(id),
+      onTransformCommit: () => {
+        this.sim.captureInitialState();
+        if (this.workbenchOpen && this.activeStage === 'assembly') this.renderSidebar();
+      },
       onContextLost: (lost) => {
         this.notify(lost ? 'WebGL context lost — preserving project state.' : 'WebGL context restored.', lost ? 'warn' : 'info');
       },
@@ -331,6 +343,21 @@ class FrozenApertureApp {
       } else if ((e.metaKey || e.ctrlKey) && e.key.toLowerCase() === 'z') {
         e.preventDefault();
         this.sim.undo();
+      } else if (!this.workbenchOpen && e.key === 'Tab' && this.scene?.objects?.length) {
+        // (#23) Keyboard-first object cycling in Immersive Play Mode
+        e.preventDefault();
+        const objs = this.scene.objects;
+        const curIdx = objs.findIndex(o => o.id === this.selectedObjectId);
+        const nextIdx = e.shiftKey
+          ? (curIdx <= 0 ? objs.length - 1 : curIdx - 1)
+          : (curIdx + 1) % objs.length;
+        const nextObj = objs[nextIdx];
+        this.selectedObjectId = nextObj.id;
+        this.renderer.setSelectedObject(nextObj.id);
+        this.notify(`Focused: ${nextObj.label} (${nextObj.temporalState}) — press Space to toggle.`);
+      } else if (!this.workbenchOpen && (e.key === ' ' || e.code === 'Space') && this.selectedObjectId) {
+        e.preventDefault();
+        this.handleViewportObjectTap(this.selectedObjectId);
       }
     });
 
@@ -439,7 +466,7 @@ class FrozenApertureApp {
       </div>
 
       <div class="wb-section">
-        <h3 class="wb-title">Source Camera & Reference Overlay</h3>
+        <h3 class="wb-title">Source Camera & Calibration (#3)</h3>
         <div class="wb-row">
           <label for="in-ref-opacity">Reference Opacity</label>
           <input type="range" id="in-ref-opacity" min="0" max="1" step="0.05" value="${this.referenceOverlayOpacity}" style="flex:1" />
@@ -447,8 +474,21 @@ class FrozenApertureApp {
         </div>
         <div class="wb-row">
           <button class="wb-btn" id="btn-goto-src-cam">Go to Source Camera</button>
-          <button class="wb-btn" id="btn-save-src-cam">Calibrate Current View as Source</button>
+          <button class="wb-btn" id="btn-save-src-cam">Save Pose</button>
+          <button class="wb-btn primary" id="btn-solve-landmarks">Solve Landmarks</button>
         </div>
+      </div>
+
+      <div class="wb-section">
+        <h3 class="wb-title">Disocclusion Background Plate (#5)</h3>
+        <div class="wb-row">
+          <button class="wb-btn primary" id="btn-gen-bg-plate">Generate Clean Background Plate</button>
+        </div>
+        ${this.scene.environment?.backgroundRepresentation?.mode === 'disoccluded_inpainted_plate' ? `
+          <div class="mono">
+            Mode: disoccluded_inpainted_plate · Coverage: ${Math.round((this.scene.environment.backgroundRepresentation.coverage || 0) * 100)}% · Confidence: ${Math.round((this.scene.environment.backgroundRepresentation.confidence || 0) * 100)}% (collisionReady: false)
+          </div>
+        ` : '<div class="mono">No inpainted background plate generated yet.</div>'}
       </div>
     `;
 
@@ -493,6 +533,40 @@ class FrozenApertureApp {
       Object.assign(this.scene.cameras.sourceCamera, pose, { calibrated: true });
       this.notify('Saved current camera pose as calibrated Source Camera.');
     });
+
+    sb.querySelector('#btn-solve-landmarks')?.addEventListener('click', () => {
+      try {
+        const srcCam = this.scene.cameras.sourceCamera;
+        const w = srcCam.imageWidth || 1200;
+        const h = srcCam.imageHeight || 750;
+        const pairs = this.scene.objects
+          .filter(o => o.sourceObjectId)
+          .slice(0, 4)
+          .map(o => {
+            const so = this.project.sourceObjects.find(s => s.id === o.sourceObjectId);
+            if (!so?.bbox) return null;
+            return { world3D: [...o.position], pixel2D: [so.bbox.x + so.bbox.w * 0.5, so.bbox.y + so.bbox.h * 0.5] };
+          })
+          .filter(Boolean);
+        const solved = solveCameraFromLandmarks({ ...srcCam, imageWidth: w, imageHeight: h }, pairs);
+        this.scene.cameras.sourceCamera = solved.camera;
+        this.renderer.applyCameraPose(solved.camera);
+        this.notify(`Landmark calibration RMSE: ${solved.initialRmsePx}px → ${solved.finalRmsePx}px.`);
+      } catch (err) {
+        this.notify(err.message, 'error');
+      }
+    });
+
+    sb.querySelector('#btn-gen-bg-plate')?.addEventListener('click', async () => {
+      try {
+        const plate = await generateBackgroundPlateFromSource(this.project.project.sourceIllustration, this.project.sourceObjects);
+        this.scene.environment.backgroundRepresentation = plate;
+        this.renderSidebar();
+        this.notify(`Generated disoccluded background plate (${plate.inpaintedPixels} px inpainted).`);
+      } catch (err) {
+        this.notify(err.message, 'error');
+      }
+    });
   }
 
   renderObjectsPanel(sb) {
@@ -503,7 +577,7 @@ class FrozenApertureApp {
       <div class="wb-section">
         <h3 class="wb-title">Extracted Source Objects (${objs.length})</h3>
         <div class="notice">
-          Draw a rectangular or polygon mask directly on the 2D canvas on the left. Promote any extracted object to the 3D scene as an honest <code>source_image_layer</code>, then replace it with a volumetric GLB later without changing its logical ID.
+          Draw Rect/Polygon masks on the left. In <strong>Select</strong> mode, drag polygon vertices, <strong>Shift+click</strong> an edge to insert a vertex, or <strong>right-click</strong> a vertex to delete it (#2).
         </div>
         <div class="wb-list">
           ${objs.map(o => `
@@ -517,14 +591,23 @@ class FrozenApertureApp {
 
       ${sel ? `
         <div class="wb-section">
-          <h3 class="wb-title">Selected Source Object</h3>
+          <h3 class="wb-title">Selected Source Object & Mask Refinement (#1)</h3>
           <div class="wb-row">
             <input class="wb-input" id="in-src-label" value="${escapeHtml(sel.label)}" style="flex:1" />
             <button class="wb-btn" id="btn-rename-src">Rename</button>
           </div>
           <div class="mono" style="margin-bottom:8px">
-            ID: ${escapeHtml(sel.id)}<br/>
-            BBox: ${sel.bbox ? `${sel.bbox.x},${sel.bbox.y} (${sel.bbox.w}×${sel.bbox.h})` : 'none'}
+            ID: ${escapeHtml(sel.id)} · BBox: ${sel.bbox ? `${sel.bbox.x},${sel.bbox.y} (${sel.bbox.w}×${sel.bbox.h})` : 'none'}
+          </div>
+          <div class="wb-row">
+            <label class="mono">Feather(px)</label>
+            <input class="wb-input" type="number" min="0" max="24" id="in-mask-feather" value="${this.segWorkbench.featherPx}" style="width:64px" />
+            <label class="mono">Dilate/Erode</label>
+            <input class="wb-input" type="number" min="-12" max="12" id="in-mask-morph" value="${this.segWorkbench.morphologyPx}" style="width:64px" />
+          </div>
+          <div class="wb-row">
+            <label class="mono" for="in-mask-png">Import Mask PNG:</label>
+            <input type="file" id="in-mask-png" accept="image/png" class="wb-input" style="flex:1" />
           </div>
           <div class="wb-row">
             <button class="wb-btn primary" id="btn-promote-layer">Add to 3D Scene as Layer</button>
@@ -541,6 +624,24 @@ class FrozenApertureApp {
         this.segWorkbench.render();
         this.renderSidebar();
       });
+    });
+
+    sb.querySelector('#in-mask-feather')?.addEventListener('change', (e) => {
+      this.segWorkbench.featherPx = Math.max(0, Number(e.target.value) || 0);
+    });
+    sb.querySelector('#in-mask-morph')?.addEventListener('change', (e) => {
+      this.segWorkbench.morphologyPx = Number(e.target.value) || 0;
+    });
+    sb.querySelector('#in-mask-png')?.addEventListener('change', async (e) => {
+      const file = e.target.files?.[0];
+      if (!file || !sel) return;
+      try {
+        const meta = await ingestImageFile(file);
+        this.segWorkbench.importBinaryMaskDataUrl(sel.id, meta.dataUrl);
+        this.notify(`Imported binary PNG mask onto ${sel.label}.`);
+      } catch (err) {
+        this.notify(err.message, 'error');
+      }
     });
 
     sb.querySelector('#btn-rename-src')?.addEventListener('click', () => {
@@ -617,7 +718,7 @@ class FrozenApertureApp {
     const jobs = this.project.jobs || [];
     sb.innerHTML = `
       <div class="wb-section">
-        <h3 class="wb-title">Reconstruction Providers</h3>
+        <h3 class="wb-title">Reconstruction Providers (#6, #7)</h3>
         ${this.providerStatuses.map(p => `
           <div class="wb-list-item" style="flex-direction:column;align-items:flex-start;cursor:default;margin-bottom:6px">
             <div style="display:flex;justify-content:space-between;width:100%">
@@ -629,7 +730,7 @@ class FrozenApertureApp {
         `).join('')}
         <div class="wb-row">
           <input class="wb-input" id="in-dex-url" placeholder="http://big-mac.local:8787 (optional)" value="${escapeHtml(this.dexProvider.baseUrl)}" style="flex:1" />
-          <button class="wb-btn" id="btn-probe-providers">Probe</button>
+          <button class="wb-btn" id="btn-probe-providers">Probe 3D & World</button>
         </div>
       </div>
 
@@ -661,8 +762,9 @@ class FrozenApertureApp {
       const url = sb.querySelector('#in-dex-url')?.value || '';
       this.dexProvider.setBaseUrl(url);
       this.providerStatuses = await this.providers.discoverAll();
+      const worldStatus = await this.dexProvider.probeWorldWorkers();
       this.renderSidebar();
-      this.notify('Refreshed provider capabilities.');
+      this.notify(`Probed providers (World/SHARP: ${worldStatus.state}).`);
     });
 
     sb.querySelector('#in-glb-file')?.addEventListener('change', async (e) => {
@@ -709,8 +811,17 @@ class FrozenApertureApp {
 
       ${sel ? `
         <div class="wb-section">
-          <h3 class="wb-title">Transform — ${escapeHtml(sel.label)}</h3>
+          <h3 class="wb-title">Transform & 3D Gizmo (#16) — ${escapeHtml(sel.label)}</h3>
           <div class="mono" style="margin-bottom:6px">ID: ${escapeHtml(sel.id)} · State: ${escapeHtml(sel.temporalState)}</div>
+          <div class="wb-row">
+            <select class="wb-select" id="sel-gizmo-mode" style="flex:1">
+              <option value="off" ${this.gizmoMode === 'off' ? 'selected' : ''}>Gizmo: Off</option>
+              <option value="translate" ${this.gizmoMode === 'translate' ? 'selected' : ''}>Gizmo: Translate</option>
+              <option value="rotate" ${this.gizmoMode === 'rotate' ? 'selected' : ''}>Gizmo: Rotate</option>
+              <option value="scale" ${this.gizmoMode === 'scale' ? 'selected' : ''}>Gizmo: Scale</option>
+            </select>
+            <button class="wb-btn ${this.gizmoSnap ? 'primary' : ''}" id="btn-gizmo-snap">Snap: ${this.gizmoSnap ? 'ON' : 'OFF'}</button>
+          </div>
           <label class="mono">Position (m)</label>
           <div class="wb-grid-3" style="margin-bottom:6px">
             <input class="wb-input" type="number" step="0.1" id="tx" value="${sel.position[0]}" />
@@ -724,22 +835,33 @@ class FrozenApertureApp {
             <input class="wb-input" type="number" step="0.1" min="0.1" id="sz" value="${sel.scale[2]}" />
           </div>
           <div class="wb-row">
-            <button class="wb-btn primary" id="btn-apply-xform">Apply Transform</button>
+            <button class="wb-btn primary" id="btn-apply-xform">Apply</button>
             <button class="wb-btn" id="btn-focus-obj">Focus</button>
             <button class="wb-btn" id="btn-isolate-obj">${this.renderer.isolatedObjectId === sel.id ? 'Un-Isolate' : 'Isolate'}</button>
           </div>
         </div>
 
         <div class="wb-section">
-          <h3 class="wb-title">Asset Binding & Reversible Replacement</h3>
+          <h3 class="wb-title">Asset & Multi-Component Slots (#9, #10, #13)</h3>
           <div class="wb-row">
             <select class="wb-select" id="sel-bind-asset" style="flex:1">
               ${validAssets.map(a => `<option value="${escapeHtml(a.id)}" ${sel.assetId === a.id ? 'selected' : ''}>${escapeHtml(a.label)} [${escapeHtml(a.lifecycleState)}]</option>`).join('')}
             </select>
           </div>
           <div class="wb-row">
-            <button class="wb-btn primary" id="btn-bind-asset">Bind Volumetric GLB</button>
-            <button class="wb-btn" id="btn-revert-asset" ${!sel.assetHistory?.length ? 'disabled' : ''}>Revert Previous</button>
+            <button class="wb-btn primary" id="btn-bind-asset">Bind Whole GLB</button>
+            <button class="wb-btn" id="btn-revert-asset" ${!sel.assetHistory?.length ? 'disabled' : ''}>Revert</button>
+            <button class="wb-btn" id="btn-autofit-col">Auto-Fit Proxy</button>
+          </div>
+          <div class="wb-row">
+            <select class="wb-select" id="sel-comp-slot">
+              <option value="body">Slot: body</option>
+              <option value="weapon">Slot: weapon</option>
+              <option value="clothing">Slot: clothing</option>
+              <option value="effect">Slot: effect</option>
+            </select>
+            <button class="wb-btn" id="btn-bind-comp">Bind Slot</button>
+            <button class="wb-btn" id="btn-bake-vcol">Bake Vertex Colors</button>
           </div>
         </div>
       ` : ''}
@@ -755,8 +877,19 @@ class FrozenApertureApp {
     sb.querySelectorAll('[data-obj-id]').forEach(btn => {
       btn.addEventListener('click', () => {
         this.selectedObjectId = btn.dataset.objId;
+        this.renderer.setSelectedObject(this.selectedObjectId);
         this.renderSidebar();
       });
+    });
+
+    sb.querySelector('#sel-gizmo-mode')?.addEventListener('change', (e) => {
+      this.gizmoMode = e.target.value;
+      this.renderer.setGizmoEnabled(this.gizmoMode !== 'off', this.gizmoMode === 'off' ? 'translate' : this.gizmoMode, this.gizmoSnap);
+    });
+    sb.querySelector('#btn-gizmo-snap')?.addEventListener('click', () => {
+      this.gizmoSnap = !this.gizmoSnap;
+      this.renderer.setGizmoEnabled(this.gizmoMode !== 'off', this.gizmoMode === 'off' ? 'translate' : this.gizmoMode, this.gizmoSnap);
+      this.renderSidebar();
     });
 
     sb.querySelector('#btn-apply-xform')?.addEventListener('click', () => {
@@ -764,7 +897,8 @@ class FrozenApertureApp {
       sel.position = [Number(sb.querySelector('#tx').value) || 0, Number(sb.querySelector('#ty').value) || 0, Number(sb.querySelector('#tz').value) || 0];
       sel.scale = [Math.max(0.1, Number(sb.querySelector('#sx').value) || 1), Math.max(0.1, Number(sb.querySelector('#sy').value) || 1), Math.max(0.1, Number(sb.querySelector('#sz').value) || 1)];
       this.sim.captureInitialState();
-      this.renderer.syncFromSimulation();
+      this.renderer.syncFromSimulation(0, this.sim);
+      this.renderer.markDirty();
       this.notify(`Updated transform for ${sel.id}.`);
     });
 
@@ -787,6 +921,60 @@ class FrozenApertureApp {
         await this.renderer.upsertObjectMesh(sel);
         this.notify(`Bound volumetric GLB to ${sel.id} (logical ID preserved).`);
         this.renderSidebar();
+      } catch (err) {
+        this.notify(err.message, 'error');
+      }
+    });
+
+    sb.querySelector('#btn-bind-comp')?.addEventListener('click', async () => {
+      const assetId = sb.querySelector('#sel-bind-asset')?.value;
+      const slot = sb.querySelector('#sel-comp-slot')?.value || 'body';
+      if (!sel || !assetId) return;
+      try {
+        this.assetManager.bindComponentSlot(this.project, this.scene, sel.id, slot, assetId);
+        await this.renderer.upsertObjectMesh(sel);
+        this.notify(`Bound component slot '${slot}' on ${sel.id}.`);
+        this.renderSidebar();
+      } catch (err) {
+        this.notify(err.message, 'error');
+      }
+    });
+
+    sb.querySelector('#btn-autofit-col')?.addEventListener('click', async () => {
+      const assetId = sel?.assetId || sb.querySelector('#sel-bind-asset')?.value;
+      if (!sel || !assetId) return;
+      try {
+        const col = this.assetManager.fitCollisionProxyFromAsset(this.project, sel, assetId, 'capsule');
+        await this.renderer.upsertObjectMesh(sel);
+        this.notify(`Auto-fitted ${col.shape} proxy (r=${col.radius}) from GLB bounds.`);
+      } catch (err) {
+        this.notify(err.message, 'error');
+      }
+    });
+
+    sb.querySelector('#btn-bake-vcol')?.addEventListener('click', async () => {
+      const src = this.project.project.sourceIllustration;
+      const group = sel && this.renderer.objectMeshes.get(sel.id);
+      if (!src?.dataUrl || !group) {
+        this.notify('Load a source illustration and select a 3D mesh first.', 'warn');
+        return;
+      }
+      try {
+        const img = await new Promise((resolve, reject) => {
+          const im = new Image();
+          im.onload = () => resolve(im);
+          im.onerror = reject;
+          im.src = src.dataUrl;
+        });
+        const c = document.createElement('canvas');
+        c.width = img.naturalWidth;
+        c.height = img.naturalHeight;
+        const ctx = c.getContext('2d');
+        ctx.drawImage(img, 0, 0);
+        const imgData = ctx.getImageData(0, 0, c.width, c.height);
+        const stats = bakeSourceVertexColors(group, imgData, this.scene.cameras.sourceCamera);
+        this.renderer.markDirty();
+        this.notify(`Baked vertex colors: ${stats.observedVertices} observed / ${stats.inferredVertices} inferred.`);
       } catch (err) {
         this.notify(err.message, 'error');
       }
@@ -874,6 +1062,9 @@ class FrozenApertureApp {
   renderValidationPanel(sb) {
     const check = validateProject(this.project);
     const tel = this.renderer.getTelemetry();
+    const assets = this.project.assets || [];
+    const canCompare = assets.length >= 2;
+    const cmp = canCompare ? this.assetManager.compareCandidates(this.project, assets[0].id, assets[1].id) : null;
 
     sb.innerHTML = `
       <div class="wb-section">
@@ -887,9 +1078,33 @@ class FrozenApertureApp {
       </div>
 
       <div class="wb-section">
-        <h3 class="wb-title">Asset Registry & Lifecycle (${this.project.assets.length})</h3>
+        <h3 class="wb-title">Silhouette IoU Alignment (#4)</h3>
+        <div class="wb-row">
+          <button class="wb-btn primary" id="btn-eval-iou">Evaluate Selected Silhouette IoU</button>
+        </div>
+        ${this.lastIouResult ? `
+          <div class="mono" style="margin-bottom:6px">
+            IoU: <strong>${this.lastIouResult.iouPercent}%</strong> · Precision: ${Math.round(this.lastIouResult.precision * 100)}% · Recall: ${Math.round(this.lastIouResult.recall * 100)}%
+          </div>
+          <img src="${this.lastIouResult.heatmapDataUrl}" alt="Silhouette IoU difference heatmap" style="width:100%;border:1px solid var(--border-subtle);background:#05070c" />
+        ` : '<div class="mono">Green = match · Cyan = 3D outside mask · Magenta = source missing.</div>'}
+      </div>
+
+      ${cmp ? `
+        <div class="wb-section">
+          <h3 class="wb-title">Candidate Comparator (#8)</h3>
+          <div class="mono">
+            <div><strong>Incumbent:</strong> ${escapeHtml(cmp.incumbent.label)} (${cmp.incumbent.vertices}v / ${cmp.incumbent.triangles}t)</div>
+            <div><strong>Candidate:</strong> ${escapeHtml(cmp.candidate.label)} (${cmp.candidate.vertices}v / ${cmp.candidate.triangles}t)</div>
+            <div><strong>Delta:</strong> ${cmp.deltas.vertexDelta >= 0 ? '+' : ''}${cmp.deltas.vertexDelta}v · ${cmp.deltas.triangleDelta >= 0 ? '+' : ''}${cmp.deltas.triangleDelta}t · ${cmp.deltas.byteDelta >= 0 ? '+' : ''}${cmp.deltas.byteDelta}B</div>
+          </div>
+        </div>
+      ` : ''}
+
+      <div class="wb-section">
+        <h3 class="wb-title">Asset Registry & Lifecycle (${assets.length})</h3>
         <div class="wb-list">
-          ${this.project.assets.map(a => `
+          ${assets.map(a => `
             <div class="wb-list-item" style="flex-direction:column;align-items:flex-start;cursor:default">
               <div style="display:flex;justify-content:space-between;width:100%">
                 <strong>${escapeHtml(a.label)}</strong>
@@ -910,14 +1125,35 @@ class FrozenApertureApp {
       </div>
 
       <div class="wb-section">
-        <h3 class="wb-title">Renderer Telemetry</h3>
+        <h3 class="wb-title">Renderer Telemetry (#19, #24)</h3>
         <div class="mono">
           Draw Calls: ${tel.drawCalls} · Triangles: ${tel.triangles}<br/>
-          Geometries: ${tel.geometries} · Textures: ${tel.textures}<br/>
-          Quality: ${tel.qualityTier} · Objects: ${tel.objectCount}
+          Objects: ${tel.objectCount} (Instanced: ${tel.instancedCount})<br/>
+          Idle Frames Skipped: ${tel.idleFramesSkipped} · Rendered: ${tel.framesRendered}
         </div>
       </div>
     `;
+
+    sb.querySelector('#btn-eval-iou')?.addEventListener('click', () => {
+      const selObj = this.scene.objects.find(o => o.id === this.selectedObjectId && o.sourceObjectId)
+        || this.scene.objects.find(o => o.sourceObjectId);
+      const so = selObj && this.project.sourceObjects.find(s => s.id === selObj.sourceObjectId);
+      if (!selObj || !so) {
+        this.notify('Select a scene object linked to a source object mask.', 'warn');
+        return;
+      }
+      const prevIso = this.renderer.isolatedObjectId;
+      this.renderer.applyCameraPose(this.scene.cameras.sourceCamera);
+      this.renderer.setIsolatedObject(selObj.id);
+      this.renderer.renderFrame(true);
+      const srcW = this.scene.cameras.sourceCamera.imageWidth || 1200;
+      const srcH = this.scene.cameras.sourceCamera.imageHeight || 750;
+      this.lastIouResult = evaluateCanvasSilhouetteIoU(this.renderer.renderer.domElement, so, srcW, srcH);
+      this.renderer.setIsolatedObject(prevIso);
+      this.renderer.renderFrame(true);
+      this.notify(`Silhouette IoU for ${selObj.label}: ${this.lastIouResult.iouPercent}%.`);
+      this.renderSidebar();
+    });
 
     sb.querySelectorAll('[data-asset-state]').forEach(sel => {
       sel.addEventListener('change', (e) => {
@@ -937,16 +1173,21 @@ class FrozenApertureApp {
     const saved = this.store.listSaved();
     sb.innerHTML = `
       <div class="wb-section">
-        <h3 class="wb-title">Project Persistence</h3>
+        <h3 class="wb-title">Project Persistence — IndexedDB & Bundles (#21, #22)</h3>
         <div class="mono" style="margin-bottom:8px">
           Project: ${escapeHtml(this.project.project.name)} (rev ${this.project.project.revision})
         </div>
         <div class="wb-row">
-          <button class="wb-btn primary" id="btn-save-proj">Save Revision (Browser)</button>
-          <button class="wb-btn" id="btn-export-json">Export Project JSON</button>
+          <button class="wb-btn primary" id="btn-save-proj">Save (IndexedDB)</button>
+          <button class="wb-btn primary" id="btn-export-zip">Export .fap.zip</button>
+          <button class="wb-btn" id="btn-export-json">Export JSON</button>
         </div>
         <div class="wb-row">
-          <label class="mono" for="in-import-json">Open Project JSON:</label>
+          <label class="mono" for="in-import-zip">Import .fap.zip:</label>
+          <input type="file" id="in-import-zip" accept=".zip,.fap.zip,application/zip" class="wb-input" style="flex:1" />
+        </div>
+        <div class="wb-row">
+          <label class="mono" for="in-import-json">Open JSON:</label>
           <input type="file" id="in-import-json" accept="application/json,.json" class="wb-input" style="flex:1" />
         </div>
       </div>
@@ -972,11 +1213,42 @@ class FrozenApertureApp {
       </div>
     `;
 
-    sb.querySelector('#btn-save-proj')?.addEventListener('click', () => {
+    sb.querySelector('#btn-save-proj')?.addEventListener('click', async () => {
       try {
-        const res = this.store.saveProject(this.project);
+        const res = await this.store.saveProjectAsync(this.project, this.assetManager);
         this.notify(res.message);
         this.renderSidebar();
+      } catch (err) {
+        this.notify(err.message, 'error');
+      }
+    });
+
+    sb.querySelector('#btn-export-zip')?.addEventListener('click', () => {
+      try {
+        const zipBytes = exportProjectZipBundle(this.project, this.assetManager);
+        const blob = new Blob([zipBytes], { type: 'application/zip' });
+        const url = URL.createObjectURL(blob);
+        const a = document.createElement('a');
+        a.href = url;
+        a.download = sanitizeFilename(`${this.project.project.id}_rev${this.project.project.revision}.fap.zip`);
+        a.click();
+        URL.revokeObjectURL(url);
+        this.notify(`Exported portable .fap.zip bundle (${(zipBytes.byteLength / 1024).toFixed(1)} KB).`);
+      } catch (err) {
+        this.notify(err.message, 'error');
+      }
+    });
+
+    sb.querySelector('#in-import-zip')?.addEventListener('change', async (e) => {
+      const file = e.target.files?.[0];
+      if (!file) return;
+      try {
+        const buf = new Uint8Array(await file.arrayBuffer());
+        const { project, entryCount } = importProjectZipBundle(buf, this.assetManager);
+        this.project = project;
+        await this.bindActiveScene();
+        this.renderSidebar();
+        this.notify(`Imported .fap.zip bundle (${entryCount} entries).`);
       } catch (err) {
         this.notify(err.message, 'error');
       }
@@ -1032,7 +1304,7 @@ class FrozenApertureApp {
     sb.querySelectorAll('[data-load-proj]').forEach(btn => {
       btn.addEventListener('click', async () => {
         try {
-          const { project } = this.store.loadProjectById(btn.dataset.loadProj);
+          const { project } = await this.store.loadProjectAsync(btn.dataset.loadProj, this.assetManager);
           this.project = project;
           await this.bindActiveScene();
           this.renderSidebar();
@@ -1073,8 +1345,9 @@ class FrozenApertureApp {
       this.sim.advance(dt);
     }
     if (this.renderer) {
-      this.renderer.syncFromSimulation(dt);
-      this.renderer.renderFrame();
+      this.renderer.syncFromSimulation(dt, this.sim);
+      this.renderer.renderFrame(false);
+      this.audio.updateListener(this.renderer.camera);
     }
   }
 
@@ -1088,38 +1361,44 @@ class FrozenApertureApp {
         ...this.renderer.getTelemetry(),
         frameTimesMs: [...this.frameTimes],
       }),
-      releaseObject: (id) => this.sim.releaseObject(id),
-      suspendObject: (id) => this.sim.suspendObject(id),
-      releaseAll: () => this.sim.releaseAll(),
-      undo: () => this.sim.undo(),
-      reset: () => this.sim.reset(),
+      releaseObject: (id) => { const r = this.sim.releaseObject(id); this.renderer.markDirty(); return r; },
+      suspendObject: (id) => { const r = this.sim.suspendObject(id); this.renderer.markDirty(); return r; },
+      releaseAll: () => { const r = this.sim.releaseAll(); this.renderer.markDirty(); return r; },
+      undo: () => { const r = this.sim.undo(); this.renderer.markDirty(); return r; },
+      reset: () => { const r = this.sim.reset(); this.renderer.markDirty(); return r; },
       stepTicks: (n) => {
         for (let i = 0; i < n; i++) this.sim.stepFixed();
-        this.renderer.syncFromSimulation(n / 60);
-        this.renderer.renderFrame();
+        this.renderer.syncFromSimulation(n / 60, this.sim);
+        this.renderer.renderFrame(true);
         return this.sim.getStats();
       },
       setWorkbenchOpen: (open, stage) => this.setWorkbenchOpen(open, stage),
       setInspectionMode: (m) => {
         this.renderer.setInspectionMode(m);
-        this.renderer.renderFrame();
+        this.renderer.renderFrame(true);
       },
       setQualityTier: (q) => {
         this.renderer.setQualityTier(q);
-        this.renderer.renderFrame();
+        this.renderer.renderFrame(true);
       },
       setReducedMotion: (f) => this.renderer.setReducedMotion(f),
       setExperienceMode: (m) => this.setExperienceMode(m),
+      setGizmoMode: (mode, snap = false) => {
+        this.gizmoMode = mode;
+        this.gizmoSnap = snap;
+        this.renderer.setGizmoEnabled(mode !== 'off', mode === 'off' ? 'translate' : mode, snap);
+        this.renderer.renderFrame(true);
+      },
       applyNamedView: (viewId) => {
         const v = this.scene.cameras?.namedViews?.find(x => x.id === viewId);
         if (v) {
           this.renderer.applyCameraPose(v);
-          this.renderer.renderFrame();
+          this.renderer.renderFrame(true);
         }
       },
       focusObject: (id) => {
         this.renderer.focusObject(id);
-        this.renderer.renderFrame();
+        this.renderer.renderFrame(true);
       },
       loadSyntheticPlate: async () => {
         const meta = await createSyntheticTestIllustration();
@@ -1128,7 +1407,17 @@ class FrozenApertureApp {
         if (this.workbenchOpen) this.renderSidebar();
         return meta.sha256;
       },
+      loadStressScene114: async () => {
+        this.project = await createPublicCalibrationProject(this.assetManager, { fragmentCount: 100 });
+        await this.bindActiveScene();
+        this.renderer.renderFrame(true);
+        return {
+          totalObjects: this.scene.objects.length,
+          telemetry: this.renderer.getTelemetry(),
+        };
+      },
       exportStandaloneHtml: () => buildStandaloneHtmlExport(this.project, document.documentElement.outerHTML),
+      exportZipBundleSize: () => exportProjectZipBundle(this.project, this.assetManager).byteLength,
     };
   }
 }

@@ -13,7 +13,7 @@
  * - Fixed-step integration (1/60s) with bounded substeps, Undo snapshots, Reset, and Deterministic Replay.
  */
 
-import { broadphasePairs, narrowphaseContact } from './collision.js';
+import { broadphasePairs, narrowphaseContact, computeSweptSphereTOI, getBodyAabb } from './collision.js';
 import { fnv1a32 } from '../core/hash.js';
 import { RESOURCE_LIMITS } from '../core/security.js';
 
@@ -23,6 +23,12 @@ function cloneVec3(v) {
 
 export function isTemporallyFrozen(state) {
   return state === 'held' || state === 'suspended' || state === 'restored';
+}
+
+function estimateInertia(obj) {
+  const m = Math.max(0.05, obj.physics?.mass ?? 1.0);
+  const r = obj.collision?.radius ?? obj.collision?.halfExtents?.[0] ?? 0.45;
+  return Math.max(0.02, 0.4 * m * r * r);
 }
 
 export class TemporalSimulationEngine {
@@ -35,7 +41,45 @@ export class TemporalSimulationEngine {
     this.tickLog = [];
     this.contactEvents = [];
     this.tick = 0;
+    /** (#18) Previous fixed-tick transforms for smooth render interpolation */
+    this.prevTransforms = new Map();
+    /** (#14) Per-body low-velocity sleep counters */
+    this.sleepCounters = new Map();
     this.captureInitialState();
+  }
+
+  getInterpolationAlpha() {
+    const dt = this.scene?.simulation?.fixedDt || 1 / 60;
+    return Math.max(0, Math.min(1, this.accumulator / dt));
+  }
+
+  getInterpolatedTransform(obj) {
+    const prev = this.prevTransforms.get(obj.id);
+    if (!prev || isTemporallyFrozen(obj.temporalState) || obj.temporalState === 'sleeping') {
+      return { position: obj.position, rotation: obj.rotation };
+    }
+    const a = this.getInterpolationAlpha();
+    return {
+      position: [
+        prev.position[0] + (obj.position[0] - prev.position[0]) * a,
+        prev.position[1] + (obj.position[1] - prev.position[1]) * a,
+        prev.position[2] + (obj.position[2] - prev.position[2]) * a,
+      ],
+      rotation: [
+        prev.rotation[0] + (obj.rotation[0] - prev.rotation[0]) * a,
+        prev.rotation[1] + (obj.rotation[1] - prev.rotation[1]) * a,
+        prev.rotation[2] + (obj.rotation[2] - prev.rotation[2]) * a,
+      ],
+    };
+  }
+
+  recordPrevTransforms() {
+    for (const obj of this.scene.objects) {
+      this.prevTransforms.set(obj.id, {
+        position: cloneVec3(obj.position),
+        rotation: cloneVec3(obj.rotation),
+      });
+    }
   }
 
   emit(type, payload) {
@@ -79,12 +123,14 @@ export class TemporalSimulationEngine {
       obj.temporalState = s.temporalState;
       obj.velocity = cloneVec3(s.velocity);
       obj.angularVelocity = cloneVec3(s.angularVelocity);
+      this.sleepCounters.set(obj.id, 0);
     }
     this.tick = snap.tick;
     if (typeof snap.tickLogLength === 'number') {
       this.tickLog = this.tickLog.slice(0, snap.tickLogLength);
     }
     this.scene.simulation.tick = this.tick;
+    this.recordPrevTransforms();
   }
 
   captureInitialState() {
@@ -93,7 +139,9 @@ export class TemporalSimulationEngine {
     this.undoStack = [];
     this.tickLog = [];
     this.contactEvents = [];
+    this.sleepCounters.clear();
     this.initialSnapshot = this.createSnapshot('initial');
+    this.recordPrevTransforms();
     if (this.scene.simulation) {
       this.scene.simulation.initialState = this.initialSnapshot.bodies.map(b => ({ ...b }));
       this.scene.simulation.tick = 0;
@@ -121,11 +169,6 @@ export class TemporalSimulationEngine {
     if (!this.initialSnapshot) return false;
     this.pushUndo('before_reset');
     this.applySnapshot(this.initialSnapshot);
-    for (const obj of this.scene.objects) {
-      if (obj.temporalState === 'held') {
-        // Keep original held state
-      }
-    }
     this.contactEvents = [];
     if (this.scene.simulation) {
       this.scene.simulation.contactEvents = [];
@@ -139,9 +182,6 @@ export class TemporalSimulationEngine {
     return this.scene.objects.find(o => o.id === id) || null;
   }
 
-  /**
-   * Release a held/suspended/restored object into active time.
-   */
   releaseObject(id, { recordAction = true, pushUndo = true, impulse = null } = {}) {
     const obj = this.getObject(id);
     if (!obj || obj.physics?.isStatic) return false;
@@ -149,6 +189,7 @@ export class TemporalSimulationEngine {
 
     if (pushUndo) this.pushUndo(`release:${id}`);
     obj.temporalState = 'active';
+    this.sleepCounters.set(id, 0);
     if (impulse) {
       obj.velocity[0] += impulse[0];
       obj.velocity[1] += impulse[1];
@@ -158,13 +199,10 @@ export class TemporalSimulationEngine {
       this.tickLog.push({ tick: this.tick, action: 'release', id, impulse: impulse ? cloneVec3(impulse) : null });
       if (this.scene.simulation) this.scene.simulation.tickLog = [...this.tickLog];
     }
-    this.emit(obj.isVortex ? 'vortex_activated' : 'release', { id, tick: this.tick, position: cloneVec3(obj.position) });
+    this.emit(obj.isVortex ? 'vortex_activated' : 'release', { id, tick: this.tick, position: cloneVec3(obj.position), mass: obj.physics?.mass ?? 1 });
     return true;
   }
 
-  /**
-   * Explicitly suspend an active/sleeping object in place while preserving its velocity.
-   */
   suspendObject(id, { recordAction = true, pushUndo = true } = {}) {
     const obj = this.getObject(id);
     if (!obj || obj.physics?.isStatic) return false;
@@ -172,6 +210,7 @@ export class TemporalSimulationEngine {
 
     if (pushUndo) this.pushUndo(`suspend:${id}`);
     obj.temporalState = 'suspended';
+    this.sleepCounters.set(id, 0);
     if (recordAction) {
       this.tickLog.push({ tick: this.tick, action: 'suspend', id });
       if (this.scene.simulation) this.scene.simulation.tickLog = [...this.tickLog];
@@ -183,7 +222,7 @@ export class TemporalSimulationEngine {
   toggleObject(id) {
     const obj = this.getObject(id);
     if (!obj || obj.physics?.isStatic) return null;
-    if (isTemporallyFrozen(obj.temporalState)) {
+    if (isTemporallyFrozen(obj.temporalState) || obj.temporalState === 'sleeping') {
       this.releaseObject(id);
       return 'active';
     }
@@ -196,8 +235,9 @@ export class TemporalSimulationEngine {
     let count = 0;
     for (const obj of this.scene.objects) {
       if (obj.physics?.isStatic) continue;
-      if (isTemporallyFrozen(obj.temporalState)) {
+      if (isTemporallyFrozen(obj.temporalState) || obj.temporalState === 'sleeping') {
         obj.temporalState = 'active';
+        this.sleepCounters.set(obj.id, 0);
         count++;
       }
     }
@@ -216,6 +256,7 @@ export class TemporalSimulationEngine {
       if (obj.physics?.isStatic) continue;
       if (obj.temporalState === 'active' || obj.temporalState === 'sleeping') {
         obj.temporalState = 'suspended';
+        this.sleepCounters.set(obj.id, 0);
         count++;
       }
     }
@@ -227,10 +268,6 @@ export class TemporalSimulationEngine {
     return count;
   }
 
-  /**
-   * Advances simulation by real elapsed seconds using fixed-step accumulation.
-   * Clamps dt to prevent excessive catch-up after tab suspension.
-   */
   advance(elapsedSec) {
     const sim = this.scene.simulation;
     const dt = sim.fixedDt || 1 / 60;
@@ -245,10 +282,8 @@ export class TemporalSimulationEngine {
     return steps;
   }
 
-  /**
-   * Executes one deterministic fixed simulation tick.
-   */
   stepFixed(dt = this.scene.simulation.fixedDt || 1 / 60) {
+    this.recordPrevTransforms();
     const sim = this.scene.simulation;
     const objects = this.scene.objects;
     const gx = sim.gravity?.[0] ?? 0;
@@ -261,7 +296,65 @@ export class TemporalSimulationEngine {
     // 1. Check active Central Aperture vortex
     const vortex = objects.find(o => o.isVortex && o.temporalState === 'active');
 
-    // 2. Integrate active bodies ONLY (held/suspended/restored bodies remain strictly stationary)
+    // (#11) Detect if any active body is fast enough to require swept CCD substepping
+    let substeps = 1;
+    for (let i = 0; i < objects.length; i++) {
+      const obj = objects[i];
+      if (obj.physics?.isStatic || obj.temporalState !== 'active' || obj.isVortex) continue;
+      const speed = Math.hypot(obj.velocity[0], obj.velocity[1], obj.velocity[2]);
+      const r = getBodyAabb(obj).boundingRadius;
+      if (speed * dt > r * 0.65) {
+        // Check swept TOI against all other bodies
+        for (let j = 0; j < objects.length; j++) {
+          if (i === j) continue;
+          const other = objects[j];
+          if (other.visible === false || other.collision?.enabled === false) continue;
+          const otherFrozen = isTemporallyFrozen(other.temporalState) || other.temporalState === 'sleeping';
+          const toi = computeSweptSphereTOI(
+            obj.position, obj.velocity, r,
+            other.position, otherFrozen ? [0, 0, 0] : other.velocity, getBodyAabb(other).boundingRadius,
+            dt
+          );
+          if (toi !== null) {
+            substeps = Math.max(substeps, Math.min(8, Math.ceil((speed * dt) / Math.max(0.05, r * 0.5))));
+            break;
+          }
+        }
+      }
+    }
+
+    const subDt = dt / substeps;
+    for (let s = 0; s < substeps; s++) {
+      this.stepSubtick(subDt, sim, objects, vortex, gx, gy, gz, linDamp, angDamp, floorY);
+    }
+
+    // (#14) Velocity-based sleeping for settled active bodies (never sleeps vortex or bodies in mid-air)
+    for (let i = 0; i < objects.length; i++) {
+      const obj = objects[i];
+      if (obj.temporalState !== 'active' || obj.isVortex || obj.physics?.isStatic || vortex) continue;
+      const r = (obj.collision?.radius ?? 0.45) * Math.abs(obj.scale?.[1] ?? 1);
+      const nearFloor = obj.position[1] <= floorY + r + 0.03;
+      const linSpeed = Math.hypot(obj.velocity[0], obj.velocity[1], obj.velocity[2]);
+      const angSpeed = Math.hypot(obj.angularVelocity[0], obj.angularVelocity[1], obj.angularVelocity[2]);
+      if (nearFloor && linSpeed < 0.05 && angSpeed < 0.08) {
+        const cnt = (this.sleepCounters.get(obj.id) || 0) + 1;
+        this.sleepCounters.set(obj.id, cnt);
+        if (cnt >= 45) {
+          obj.temporalState = 'sleeping';
+          obj.velocity = [0, 0, 0];
+          obj.angularVelocity = [0, 0, 0];
+        }
+      } else {
+        this.sleepCounters.set(obj.id, 0);
+      }
+    }
+
+    this.tick++;
+    sim.tick = this.tick;
+  }
+
+  stepSubtick(dt, sim, objects, vortex, gx, gy, gz, linDamp, angDamp, floorY) {
+    // 2. Integrate active bodies ONLY (held/suspended/restored/sleeping bodies remain stationary)
     for (let i = 0; i < objects.length; i++) {
       const obj = objects[i];
       if (obj.physics?.isStatic || obj.temporalState !== 'active') continue;
@@ -269,17 +362,14 @@ export class TemporalSimulationEngine {
       const gravScale = obj.physics?.gravityScale ?? 1.0;
       const mass = Math.max(0.05, obj.physics?.mass ?? 1.0);
 
-      // Apply gravity (vortex itself floats in zero-g)
       if (!obj.isVortex) {
         obj.velocity[0] += gx * gravScale * dt;
         obj.velocity[1] += gy * gravScale * dt;
         obj.velocity[2] += gz * gravScale * dt;
       } else {
-        // Active vortex rotates steadily
         obj.angularVelocity[2] = obj.angularVelocity[2] || 1.4;
       }
 
-      // Apply Central Aperture vortex field ONLY if vortex is active
       if (vortex && obj.id !== vortex.id) {
         const dx = vortex.position[0] - obj.position[0];
         const dy = vortex.position[1] - obj.position[1];
@@ -290,14 +380,12 @@ export class TemporalSimulationEngine {
         if (dist > 0.25 && dist < range) {
           const pull = (vortex.vortexStrength || 7.5) / (mass * (1 + distSq * 0.18));
           const invD = 1 / dist;
-          // Radial inward pull + tangential swirl
           obj.velocity[0] += (dx * invD * pull - dz * invD * pull * 0.45) * dt;
           obj.velocity[1] += (dy * invD * pull) * dt;
           obj.velocity[2] += (dz * invD * pull + dx * invD * pull * 0.45) * dt;
         }
       }
 
-      // Damping
       obj.velocity[0] *= linDamp;
       obj.velocity[1] *= linDamp;
       obj.velocity[2] *= linDamp;
@@ -305,7 +393,6 @@ export class TemporalSimulationEngine {
       obj.angularVelocity[1] *= angDamp;
       obj.angularVelocity[2] *= angDamp;
 
-      // Integrate position & rotation
       obj.position[0] += obj.velocity[0] * dt;
       obj.position[1] += obj.velocity[1] * dt;
       obj.position[2] += obj.velocity[2] * dt;
@@ -314,47 +401,42 @@ export class TemporalSimulationEngine {
       obj.rotation[1] += obj.angularVelocity[1] * dt;
       obj.rotation[2] += obj.angularVelocity[2] * dt;
 
-      // Floor plane contact
+      // Floor plane contact with Coulomb friction (#14)
       const radius = (obj.collision?.radius ?? 0.45) * Math.abs(obj.scale?.[1] ?? 1);
       const minY = floorY + radius;
       if (obj.position[1] < minY && !obj.isVortex) {
         obj.position[1] = minY;
         if (obj.velocity[1] < 0) {
           const restitution = obj.physics?.restitution ?? sim.restitution ?? 0.42;
+          const friction = obj.physics?.friction ?? 0.35;
           const impactSpeed = Math.abs(obj.velocity[1]);
           obj.velocity[1] = -obj.velocity[1] * restitution;
-          obj.velocity[0] *= 0.88;
-          obj.velocity[2] *= 0.88;
+          obj.velocity[0] *= Math.max(0, 1 - friction * 0.35);
+          obj.velocity[2] *= Math.max(0, 1 - friction * 0.35);
           if (impactSpeed > 0.6) {
-            this.emit('contact', { a: obj.id, b: 'floor', impulse: impactSpeed * mass, position: cloneVec3(obj.position) });
+            this.emit('contact', { a: obj.id, b: 'floor', impulse: impactSpeed * mass, mass, position: cloneVec3(obj.position) });
           }
           if (Math.abs(obj.velocity[1]) < 0.08) obj.velocity[1] = 0;
         }
       }
     }
 
-    // 3. Vortex proximity activation ONLY when vortex is active and wave reaches held bodies
+    // 3. Vortex proximity activation ONLY when vortex is active
     if (vortex) {
-      const waveRadius = Math.min(vortex.vortexRadius || 8.5, 1.4 + (this.tick % 10000) * 0.0);
-      // Actual physical pull/contact handles activation via vortex trigger or direct contact;
-      // Additionally, if a held body is inside the vortex's physical trigger sphere, awaken it:
       const triggerR = vortex.collision?.radius ? vortex.collision.radius * 2.2 : 1.8;
       for (const obj of objects) {
         if (obj.id === vortex.id || obj.physics?.isStatic) continue;
-        if (obj.temporalState !== 'held') continue;
-        const dx = obj.position[0] - vortex.position[0];
-        const dy = obj.position[1] - vortex.position[1];
-        const dz = obj.position[2] - vortex.position[2];
-        const d = Math.hypot(dx, dy, dz);
+        if (obj.temporalState !== 'held' && obj.temporalState !== 'sleeping') continue;
+        const d = Math.hypot(obj.position[0] - vortex.position[0], obj.position[1] - vortex.position[1], obj.position[2] - vortex.position[2]);
         if (d <= triggerR) {
           obj.temporalState = 'active';
+          this.sleepCounters.set(obj.id, 0);
           this.recordContactEvent(vortex.id, obj.id, 1.2, true, cloneVec3(obj.position));
         }
       }
-      void waveRadius;
     }
 
-    // 4. Broadphase + Narrowphase collision detection & impulse resolution (2 sub-iterations for stability)
+    // 4. Broadphase + Narrowphase collision detection & impulse/torque/friction resolution (#14)
     const pairs = broadphasePairs(objects);
     const threshold = sim.contactActivationImpulseThreshold ?? 0.15;
 
@@ -367,55 +449,46 @@ export class TemporalSimulationEngine {
       const contact = narrowphaseContact(a, b, aabbA, aabbB);
       if (!contact) continue;
 
-      // Effective collision velocity: frozen bodies contribute ZERO velocity (stored velocity does NOT leak!)
-      const vAx = aFrozen ? 0 : a.velocity[0];
-      const vAy = aFrozen ? 0 : a.velocity[1];
-      const vAz = aFrozen ? 0 : a.velocity[2];
-      const vBx = bFrozen ? 0 : b.velocity[0];
-      const vBy = bFrozen ? 0 : b.velocity[1];
-      const vBz = bFrozen ? 0 : b.velocity[2];
+      const vAx = (aFrozen || a.temporalState === 'sleeping') ? 0 : a.velocity[0];
+      const vAy = (aFrozen || a.temporalState === 'sleeping') ? 0 : a.velocity[1];
+      const vAz = (aFrozen || a.temporalState === 'sleeping') ? 0 : a.velocity[2];
+      const vBx = (bFrozen || b.temporalState === 'sleeping') ? 0 : b.velocity[0];
+      const vBy = (bFrozen || b.temporalState === 'sleeping') ? 0 : b.velocity[1];
+      const vBz = (bFrozen || b.temporalState === 'sleeping') ? 0 : b.velocity[2];
 
       const rvx = vBx - vAx;
       const rvy = vBy - vAy;
       const rvz = vBz - vAz;
       const velAlongNormal = rvx * contact.nx + rvy * contact.ny + rvz * contact.nz;
 
-      // Compute impulse magnitude
       const invMassA = aFrozen ? 0 : 1 / Math.max(0.05, a.physics?.mass ?? 1.0);
       const invMassB = bFrozen ? 0 : 1 / Math.max(0.05, b.physics?.mass ?? 1.0);
       const invMassSum = invMassA + invMassB;
       if (invMassSum <= 0) continue;
 
       const e = Math.min(a.physics?.restitution ?? sim.restitution ?? 0.42, b.physics?.restitution ?? sim.restitution ?? 0.42);
-      let j = 0;
-      if (velAlongNormal < 0) {
-        j = -(1 + e) * velAlongNormal / invMassSum;
-      } else {
-        // Resting/overlapping penetration impulse estimate for awakening
-        j = Math.min(1.0, contact.depth * 2.5);
-      }
+      const j = velAlongNormal < 0 ? -(1 + e) * velAlongNormal / invMassSum : Math.min(1.0, contact.depth * 2.5);
 
-      // Check contact-driven temporal propagation (ONLY 'held' bodies awaken on real contact; 'suspended' stays frozen unless explicitly released)
+      // Contact-driven temporal propagation & sleeping wake
       let awakened = false;
       if (j >= threshold || contact.depth > 0.01) {
-        if (a.temporalState === 'held' && !a.physics?.isStatic && b.temporalState === 'active') {
+        if ((a.temporalState === 'held' || a.temporalState === 'sleeping') && !a.physics?.isStatic && b.temporalState === 'active') {
           a.temporalState = 'active';
+          this.sleepCounters.set(a.id, 0);
           awakened = true;
         }
-        if (b.temporalState === 'held' && !b.physics?.isStatic && a.temporalState === 'active') {
+        if ((b.temporalState === 'held' || b.temporalState === 'sleeping') && !b.physics?.isStatic && a.temporalState === 'active') {
           b.temporalState = 'active';
+          this.sleepCounters.set(b.id, 0);
           awakened = true;
         }
       }
 
       if (contact.isTrigger) {
-        if (awakened) {
-          this.recordContactEvent(a.id, b.id, j, true, contact.contactPoint);
-        }
+        if (awakened) this.recordContactEvent(a.id, b.id, j, true, contact.contactPoint);
         continue;
       }
 
-      // Recompute effective inverse masses after potential awakening so momentum transfers cleanly!
       const postFrozenA = isTemporallyFrozen(a.temporalState) || Boolean(a.physics?.isStatic);
       const postFrozenB = isTemporallyFrozen(b.temporalState) || Boolean(b.physics?.isStatic);
       const postInvA = postFrozenA ? 0 : 1 / Math.max(0.05, a.physics?.mass ?? 1.0);
@@ -429,24 +502,52 @@ export class TemporalSimulationEngine {
         const iy = jFinal * contact.ny;
         const iz = jFinal * contact.nz;
 
+        // (#14) Tangential Coulomb friction impulse
+        const tx = rvx - velAlongNormal * contact.nx;
+        const ty = rvy - velAlongNormal * contact.ny;
+        const tz = rvz - velAlongNormal * contact.nz;
+        const tLen = Math.hypot(tx, ty, tz);
+        let fx = 0, fy = 0, fz = 0;
+        if (tLen > 1e-5) {
+          const mu = Math.sqrt((a.physics?.friction ?? 0.3) * (b.physics?.friction ?? 0.3));
+          const jt = Math.min(mu * jFinal, tLen / postSum);
+          fx = -(tx / tLen) * jt;
+          fy = -(ty / tLen) * jt;
+          fz = -(tz / tLen) * jt;
+        }
+
+        const totalIx = ix + fx;
+        const totalIy = iy + fy;
+        const totalIz = iz + fz;
+
+        // (#14) Contact-point lever-arm torque (tau = r x J / I)
+        const invIA = postFrozenA ? 0 : 1 / estimateInertia(a);
+        const invIB = postFrozenB ? 0 : 1 / estimateInertia(b);
+
         if (!postFrozenA) {
-          a.velocity[0] -= ix * postInvA;
-          a.velocity[1] -= iy * postInvA;
-          a.velocity[2] -= iz * postInvA;
-          // Tangential spin from contact
-          a.angularVelocity[0] += contact.nz * jFinal * 0.18 * postInvA;
-          a.angularVelocity[2] -= contact.nx * jFinal * 0.18 * postInvA;
+          a.velocity[0] -= totalIx * postInvA;
+          a.velocity[1] -= totalIy * postInvA;
+          a.velocity[2] -= totalIz * postInvA;
+          const rAx = contact.contactPoint[0] - a.position[0];
+          const rAy = contact.contactPoint[1] - a.position[1];
+          const rAz = contact.contactPoint[2] - a.position[2];
+          a.angularVelocity[0] -= (rAy * totalIz - rAz * totalIy) * invIA;
+          a.angularVelocity[1] -= (rAz * totalIx - rAx * totalIz) * invIA;
+          a.angularVelocity[2] -= (rAx * totalIy - rAy * totalIx) * invIA;
         }
         if (!postFrozenB) {
-          b.velocity[0] += ix * postInvB;
-          b.velocity[1] += iy * postInvB;
-          b.velocity[2] += iz * postInvB;
-          b.angularVelocity[0] -= contact.nz * jFinal * 0.18 * postInvB;
-          b.angularVelocity[2] += contact.nx * jFinal * 0.18 * postInvB;
+          b.velocity[0] += totalIx * postInvB;
+          b.velocity[1] += totalIy * postInvB;
+          b.velocity[2] += totalIz * postInvB;
+          const rBx = contact.contactPoint[0] - b.position[0];
+          const rBy = contact.contactPoint[1] - b.position[1];
+          const rBz = contact.contactPoint[2] - b.position[2];
+          b.angularVelocity[0] += (rBy * totalIz - rBz * totalIy) * invIB;
+          b.angularVelocity[1] += (rBz * totalIx - rBx * totalIz) * invIB;
+          b.angularVelocity[2] += (rBx * totalIy - rBy * totalIx) * invIB;
         }
       }
 
-      // Positional correction (Baumgarte-style) to prevent sinking
       const percent = 0.65;
       const slop = 0.002;
       const corrMag = Math.max(contact.depth - slop, 0) / postSum * percent;
@@ -465,9 +566,6 @@ export class TemporalSimulationEngine {
         this.recordContactEvent(a.id, b.id, Number(j.toFixed(4)), awakened, contact.contactPoint);
       }
     }
-
-    this.tick++;
-    sim.tick = this.tick;
   }
 
   recordContactEvent(aId, bId, impulse, propagated, point) {

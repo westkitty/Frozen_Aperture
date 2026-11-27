@@ -227,4 +227,88 @@ export class AssetManager {
       },
     };
   }
+
+  /**
+   * Multi-component asset assembly (#9): binds an independent GLB to a named slot
+   * ('body' | 'weapon' | 'clothing' | 'effect') with its own local transform,
+   * preserving all other approved component slots and the logical object ID.
+   */
+  bindComponentSlot(project, scene, sceneObjectId, slotName, assetId, {
+    localPosition = [0, 0, 0],
+    localRotation = [0, 0, 0],
+    localScale = [1, 1, 1],
+    reason = 'Component slot updated',
+  } = {}) {
+    const ALLOWED_SLOTS = ['body', 'weapon', 'clothing', 'effect'];
+    if (!ALLOWED_SLOTS.includes(slotName)) {
+      throw new Error(`Unsupported component slot: ${slotName} (expected ${ALLOWED_SLOTS.join(', ')})`);
+    }
+    const obj = scene.objects.find(o => o.id === sceneObjectId);
+    if (!obj) throw new Error(`Scene object not found: ${sceneObjectId}`);
+    const asset = project.assets.find(a => a.id === assetId);
+    if (!asset || !asset.validation?.valid) {
+      throw new Error(`Valid asset required for component slot ${slotName}: ${assetId}`);
+    }
+
+    if (!obj.components || typeof obj.components !== 'object') obj.components = {};
+    if (!Array.isArray(obj.componentHistory)) obj.componentHistory = [];
+
+    const prevSlot = obj.components[slotName] ? JSON.parse(JSON.stringify(obj.components[slotName])) : null;
+    obj.componentHistory.push({
+      at: new Date().toISOString(),
+      slotName,
+      previous: prevSlot,
+      nextAssetId: assetId,
+      reason,
+    });
+
+    obj.components[slotName] = {
+      assetId,
+      position: [...localPosition],
+      rotation: [...localRotation],
+      scale: [...localScale],
+      updatedAt: new Date().toISOString(),
+    };
+    obj.representationType = 'volumetric_rigid_mesh';
+    return obj;
+  }
+
+  revertComponentSlot(scene, sceneObjectId) {
+    const obj = scene.objects.find(o => o.id === sceneObjectId);
+    if (!obj || !Array.isArray(obj.componentHistory) || obj.componentHistory.length === 0) {
+      throw new Error(`No component history to revert for ${sceneObjectId}.`);
+    }
+    const last = obj.componentHistory.pop();
+    if (!obj.components) obj.components = {};
+    if (last.previous) obj.components[last.slotName] = last.previous;
+    else delete obj.components[last.slotName];
+    return obj;
+  }
+
+  /**
+   * Auto-fits a scene object's collision proxy from a validated GLB's bounding volume (#13).
+   */
+  fitCollisionProxyFromAsset(project, sceneObject, assetId, shape = 'capsule') {
+    const asset = project.assets.find(a => a.id === assetId);
+    const bounds = asset?.validation?.stats?.bounds;
+    if (!bounds || !Array.isArray(bounds.size)) {
+      throw new Error(`Asset ${assetId} has no validated bounding volume.`);
+    }
+    const [sx, sy, sz] = bounds.size;
+    const hx = Math.max(0.05, Number((sx * 0.5).toFixed(4)));
+    const hy = Math.max(0.05, Number((sy * 0.5).toFixed(4)));
+    const hz = Math.max(0.05, Number((sz * 0.5).toFixed(4)));
+
+    if (shape === 'box') {
+      sceneObject.collision = { shape: 'box', halfExtents: [hx, hy, hz], enabled: true, fittedFromAssetId: assetId };
+    } else if (shape === 'sphere') {
+      const r = Math.max(0.05, Number(Math.max(hx, hy, hz).toFixed(4)));
+      sceneObject.collision = { shape: 'sphere', radius: r, enabled: true, fittedFromAssetId: assetId };
+    } else {
+      const r = Math.max(0.05, Number(Math.max(hx, hz).toFixed(4)));
+      const halfHeight = Math.max(0.05, Number(Math.max(0.05, hy - r).toFixed(4)));
+      sceneObject.collision = { shape: 'capsule', radius: r, halfHeight, enabled: true, fittedFromAssetId: assetId };
+    }
+    return sceneObject.collision;
+  }
 }

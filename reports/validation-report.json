@@ -1,5 +1,5 @@
 {
-  "generatedAt": "2026-11-27T06:50:47.425Z",
+  "generatedAt": "2026-11-27T21:07:17.233Z",
   "environment": {
     "browser": "Chrome/158.0.8127.36",
     "renderingBackend": "Headless Chromium ANGLE SwiftShader (software WebGL 2 — NOT physical GPU/mobile benchmark)",
@@ -8,8 +8,8 @@
   },
   "artifact": {
     "path": "index.html",
-    "sha256": "c400051a377b1df2863aac5dcf53e4fcb011c01f1be589fe408b74af144693e6",
-    "bytes": 737737
+    "sha256": "bd99c2cfd753e6a9168443c1b0eb82ff680869e3d5d662e396dc4f4f4b441a4a",
+    "bytes": 814447
   },
   "checks": [
     {
@@ -25,7 +25,7 @@
     {
       "name": "10 calibration figure slots + Central Vortex + Volumetric GLB loaded",
       "passed": true,
-      "detail": "objects=38, drawCalls=61, tris=23320"
+      "detail": "objects=38, drawCalls=37, tris=23920"
     },
     {
       "name": "Three-body contact chain propagates activation in live browser",
@@ -40,7 +40,7 @@
     {
       "name": "Central Aperture vortex initiates cascade when released",
       "passed": true,
-      "detail": "active=15"
+      "detail": "active=13"
     },
     {
       "name": "Clay, Wireframe, and 360-degree Rear inspection views render cleanly",
@@ -55,25 +55,55 @@
     {
       "name": "Economy quality & Reduced Motion preserve identical simulation outcomes",
       "passed": true,
-      "detail": "hash=8893a5f9, objects=38"
+      "detail": "hash=89ecbe65, objects=38"
     },
     {
       "name": "Mobile-width viewport (390x844) renders without crash",
       "passed": true,
       "detail": ""
+    },
+    {
+      "name": "CDP orbit drag gesture does NOT accidentally release frozen objects (#25)",
+      "passed": true,
+      "detail": "active=0"
+    },
+    {
+      "name": "Keyboard Tab + Space cycles focus and toggles temporal state (#23)",
+      "passed": true,
+      "detail": "active=1"
+    },
+    {
+      "name": "On-demand idle rendering skips redundant GPU frames when static (#19)",
+      "passed": true,
+      "detail": "skipped=108"
+    },
+    {
+      "name": "Visual pixel-diff confirms distinct Shaded vs Wireframe renders (#25)",
+      "passed": true,
+      "detail": ""
+    },
+    {
+      "name": "3D TransformControls gizmo (#16) and .fap.zip bundle export (#22) work in browser",
+      "passed": true,
+      "detail": "zipBytes=791404"
+    },
+    {
+      "name": "114-body stress scene renders with InstancedMesh draw-call batching (#24, #25)",
+      "passed": true,
+      "detail": "objects=114, instanced=102, drawCalls=39"
     }
   ],
-  "passedCount": 10,
+  "passedCount": 16,
   "failedCount": 0,
   "performance": {
     "note": "Measured under headless SwiftShader software WebGL 2; not representative of native hardware-accelerated GPU frame rates.",
-    "medianFrameTimeMs": 100,
+    "medianFrameTimeMs": 16.7,
     "p95FrameTimeMs": 100,
-    "drawCalls": 49,
-    "triangles": 19116,
-    "geometries": 44,
+    "drawCalls": 39,
+    "triangles": 28376,
+    "geometries": 51,
     "textures": 1,
-    "objectCount": 38
+    "objectCount": 114
   },
   "screenshots": [
     "reports/screenshots/01-opening-immersive-play.png",
@@ -85,6 +115,7 @@
     "reports/screenshots/07-workbench-source.png",
     "reports/screenshots/08-workbench-segmentation.png",
     "reports/screenshots/09-workbench-assembly.png",
-    "reports/screenshots/10-mobile-viewport.png"
+    "reports/screenshots/10-mobile-viewport.png",
+    "reports/screenshots/11-stress-114-bodies-instanced.png"
   ]
 }

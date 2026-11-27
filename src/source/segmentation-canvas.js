@@ -28,15 +28,19 @@ export class SegmentationWorkbench {
     // Tool state: 'rect' | 'polygon' | 'pan' | 'select'
     this.tool = 'rect';
     this.padding = 12;
+    this.featherPx = 0;          // (#1) Edge feather radius in pixels
+    this.morphologyPx = 0;       // (#1) >0 dilates mask, <0 erodes mask
     this.invertMask = false;
     this.showOverlaps = true;
     this.showMaskPreview = true;
 
     this.isDragging = false;
     this.dragStart = null;
+    this.draggingVertex = null;  // (#2) { objId, vertexIndex }
     this.draftRect = null;
     this.draftPolygon = [];
     this.undoStack = [];
+    this.importedMasks = new Map(); // (#1) sourceObjectId -> HTMLImageElement
 
     this.bindEvents();
   }
@@ -46,12 +50,104 @@ export class SegmentationWorkbench {
     this.canvas.addEventListener('pointermove', e => this.onPointerMove(e));
     this.canvas.addEventListener('pointerup', e => this.onPointerUp(e));
     this.canvas.addEventListener('dblclick', e => this.onDoubleClick(e));
+    this.canvas.addEventListener('contextmenu', e => {
+      // (#2) Right-click on a polygon vertex deletes it (keeping >= 3 vertices)
+      if (!this.image) return;
+      const pt = this.screenToImage(e.clientX, e.clientY);
+      const hit = this.hitTestPolygonVertex(pt.x, pt.y);
+      if (hit) {
+        e.preventDefault();
+        const obj = this.objects.find(o => o.id === hit.objId);
+        if (obj?.mask?.points && obj.mask.points.length > 3) {
+          this.pushUndo();
+          obj.mask.points.splice(hit.vertexIndex, 1);
+          this.recomputeBboxFromPolygon(obj);
+          if (this.onObjectsChange) this.onObjectsChange(this.objects);
+          this.render();
+        }
+      }
+    });
     this.canvas.addEventListener('wheel', e => {
       e.preventDefault();
       const factor = e.deltaY < 0 ? 1.12 : 0.89;
       this.zoom = Math.max(0.15, Math.min(8, this.zoom * factor));
       this.render();
     }, { passive: false });
+  }
+
+  /**
+   * (#1) Imports a binary/alpha PNG mask onto the selected source object.
+   */
+  importBinaryMaskDataUrl(sourceObjectId, dataUrl) {
+    const obj = this.objects.find(o => o.id === sourceObjectId);
+    if (!obj) throw new Error(`Source object not found: ${sourceObjectId}`);
+    this.pushUndo();
+    obj.mask = {
+      type: 'bitmap',
+      dataUrl,
+      inverted: this.invertMask,
+      featherPx: this.featherPx,
+      morphologyPx: this.morphologyPx,
+    };
+    const img = new Image();
+    img.onload = () => {
+      this.importedMasks.set(sourceObjectId, img);
+      this.render();
+    };
+    img.src = dataUrl;
+    if (this.onObjectsChange) this.onObjectsChange(this.objects);
+    return obj;
+  }
+
+  hitTestPolygonVertex(imgX, imgY) {
+    const threshold = 9 / Math.max(0.2, this.zoom);
+    for (const o of this.objects) {
+      if (o.mask?.type !== 'polygon' || !Array.isArray(o.mask.points)) continue;
+      for (let i = 0; i < o.mask.points.length; i++) {
+        const [vx, vy] = o.mask.points[i];
+        if (Math.hypot(vx - imgX, vy - imgY) <= threshold) {
+          return { objId: o.id, vertexIndex: i };
+        }
+      }
+    }
+    return null;
+  }
+
+  hitTestPolygonEdge(imgX, imgY) {
+    const threshold = 8 / Math.max(0.2, this.zoom);
+    for (const o of this.objects) {
+      if (o.mask?.type !== 'polygon' || !Array.isArray(o.mask.points) || o.mask.points.length < 3) continue;
+      const pts = o.mask.points;
+      for (let i = 0; i < pts.length; i++) {
+        const [ax, ay] = pts[i];
+        const [bx, by] = pts[(i + 1) % pts.length];
+        const dx = bx - ax, dy = by - ay;
+        const lenSq = dx * dx + dy * dy || 1;
+        const t = Math.max(0, Math.min(1, ((imgX - ax) * dx + (imgY - ay) * dy) / lenSq));
+        const px = ax + t * dx, py = ay + t * dy;
+        if (Math.hypot(px - imgX, py - imgY) <= threshold) {
+          return { objId: o.id, insertAfter: i, x: Math.round(px), y: Math.round(py) };
+        }
+      }
+    }
+    return null;
+  }
+
+  recomputeBboxFromPolygon(obj) {
+    if (!obj?.mask?.points?.length) return;
+    let minX = Infinity, minY = Infinity, maxX = -Infinity, maxY = -Infinity;
+    for (const [px, py] of obj.mask.points) {
+      if (px < minX) minX = px;
+      if (py < minY) minY = py;
+      if (px > maxX) maxX = px;
+      if (py > maxY) maxY = py;
+    }
+    obj.bbox = {
+      x: Math.max(0, Math.round(minX)),
+      y: Math.max(0, Math.round(minY)),
+      w: Math.max(4, Math.round(maxX - minX)),
+      h: Math.max(4, Math.round(maxY - minY)),
+    };
   }
 
   setTool(tool) {
@@ -138,6 +234,30 @@ export class SegmentationWorkbench {
     }
 
     if (this.tool === 'select') {
+      // (#2) Check polygon vertex drag first
+      const vHit = this.hitTestPolygonVertex(pt.x, pt.y);
+      if (vHit) {
+        this.pushUndo();
+        this.draggingVertex = vHit;
+        this.selectedId = vHit.objId;
+        this.isDragging = true;
+        return;
+      }
+      // (#2) Shift-click on polygon edge inserts a new vertex
+      if (e.shiftKey) {
+        const eHit = this.hitTestPolygonEdge(pt.x, pt.y);
+        if (eHit) {
+          const obj = this.objects.find(o => o.id === eHit.objId);
+          if (obj?.mask?.points && obj.mask.points.length < RESOURCE_LIMITS.MAX_MASK_POINTS) {
+            this.pushUndo();
+            obj.mask.points.splice(eHit.insertAfter + 1, 0, [eHit.x, eHit.y]);
+            this.recomputeBboxFromPolygon(obj);
+            if (this.onObjectsChange) this.onObjectsChange(this.objects);
+            this.render();
+            return;
+          }
+        }
+      }
       const hit = this.objects.find(o => o.bbox && pt.x >= o.bbox.x && pt.x <= o.bbox.x + o.bbox.w && pt.y >= o.bbox.y && pt.y <= o.bbox.y + o.bbox.h);
       this.selectedId = hit ? hit.id : null;
       if (this.onSelectionChange) this.onSelectionChange(hit || null);
@@ -166,7 +286,22 @@ export class SegmentationWorkbench {
     if (this.onCoordChange) {
       this.onCoordChange({ x: Math.round(pt.x), y: Math.round(pt.y), zoom: this.zoom });
     }
-    if (!this.isDragging || !this.dragStart) return;
+    if (!this.isDragging) return;
+
+    if (this.draggingVertex) {
+      const obj = this.objects.find(o => o.id === this.draggingVertex.objId);
+      if (obj?.mask?.points?.[this.draggingVertex.vertexIndex]) {
+        obj.mask.points[this.draggingVertex.vertexIndex] = [
+          Math.max(0, Math.min(this.image.naturalWidth, Math.round(pt.x))),
+          Math.max(0, Math.min(this.image.naturalHeight, Math.round(pt.y))),
+        ];
+        this.recomputeBboxFromPolygon(obj);
+        this.render();
+      }
+      return;
+    }
+
+    if (!this.dragStart) return;
 
     if (this.tool === 'pan') {
       this.panX = this.dragStart.panX + (pt.sx - this.dragStart.sx);
@@ -185,6 +320,12 @@ export class SegmentationWorkbench {
   onPointerUp() {
     if (!this.isDragging) return;
     this.isDragging = false;
+    if (this.draggingVertex) {
+      this.draggingVertex = null;
+      if (this.onObjectsChange) this.onObjectsChange(this.objects);
+      this.render();
+      return;
+    }
 
     if (this.tool === 'rect' && this.draftRect) {
       const x = Math.max(0, Math.round(Math.min(this.draftRect.x, this.draftRect.x + this.draftRect.w)));
@@ -270,30 +411,56 @@ export class SegmentationWorkbench {
     out.height = Math.max(1, Math.round(sh));
     const ctx = out.getContext('2d');
 
-    if (sourceObject.mask?.type === 'polygon' && Array.isArray(sourceObject.mask.points) && sourceObject.mask.points.length >= 3) {
-      ctx.save();
-      ctx.beginPath();
+    const feather = Math.max(0, Number(sourceObject.mask?.featherPx ?? this.featherPx) || 0);
+    const morph = Math.round(Number(sourceObject.mask?.morphologyPx ?? this.morphologyPx) || 0);
+
+    // Build alpha mask canvas
+    const maskCanvas = document.createElement('canvas');
+    maskCanvas.width = out.width;
+    maskCanvas.height = out.height;
+    const mCtx = maskCanvas.getContext('2d');
+
+    if (feather > 0) mCtx.filter = `blur(${feather}px)`;
+
+    if (sourceObject.mask?.type === 'bitmap' && this.importedMasks.has(sourceObject.id)) {
+      const mImg = this.importedMasks.get(sourceObject.id);
+      mCtx.drawImage(mImg, sx, sy, sw, sh, 0, 0, out.width, out.height);
+    } else if (sourceObject.mask?.type === 'polygon' && Array.isArray(sourceObject.mask.points) && sourceObject.mask.points.length >= 3) {
+      mCtx.fillStyle = '#ffffff';
+      mCtx.beginPath();
       const pts = sourceObject.mask.points;
-      ctx.moveTo(pts[0][0] - sx, pts[0][1] - sy);
-      for (let i = 1; i < pts.length; i++) ctx.lineTo(pts[i][0] - sx, pts[i][1] - sy);
-      ctx.closePath();
-      if (sourceObject.mask.inverted) {
-        ctx.rect(0, 0, out.width, out.height);
-        ctx.clip('evenodd');
-      } else {
-        ctx.clip();
+      mCtx.moveTo(pts[0][0] - sx, pts[0][1] - sy);
+      for (let i = 1; i < pts.length; i++) mCtx.lineTo(pts[i][0] - sx, pts[i][1] - sy);
+      mCtx.closePath();
+      mCtx.fill();
+      if (morph > 0) {
+        mCtx.lineWidth = morph * 2;
+        mCtx.strokeStyle = '#ffffff';
+        mCtx.stroke();
+      } else if (morph < 0) {
+        mCtx.globalCompositeOperation = 'destination-out';
+        mCtx.lineWidth = Math.abs(morph) * 2;
+        mCtx.strokeStyle = '#ffffff';
+        mCtx.stroke();
       }
-      ctx.drawImage(this.image, sx, sy, sw, sh, 0, 0, out.width, out.height);
-      ctx.restore();
     } else {
-      ctx.drawImage(this.image, sx, sy, sw, sh, 0, 0, out.width, out.height);
+      mCtx.fillStyle = '#ffffff';
+      const inset = Math.max(0, -morph);
+      mCtx.fillRect(inset, inset, Math.max(1, out.width - inset * 2), Math.max(1, out.height - inset * 2));
     }
+
+    ctx.drawImage(this.image, sx, sy, sw, sh, 0, 0, out.width, out.height);
+    ctx.globalCompositeOperation = sourceObject.mask?.inverted ? 'destination-out' : 'destination-in';
+    ctx.drawImage(maskCanvas, 0, 0);
+    ctx.globalCompositeOperation = 'source-over';
 
     return {
       dataUrl: out.toDataURL('image/png'),
       cropRect: { x: sx, y: sy, w: sw, h: sh },
       sourceWidth: this.image.naturalWidth,
       sourceHeight: this.image.naturalHeight,
+      featherPx: feather,
+      morphologyPx: morph,
     };
   }
 
@@ -337,6 +504,19 @@ export class SegmentationWorkbench {
           ctx.strokeStyle = isSelected ? '#38bdf8' : '#94a3b8';
           ctx.lineWidth = 2 / this.zoom;
           ctx.stroke();
+
+          // (#2) Draw interactive vertex handles when selected
+          if (isSelected) {
+            for (const [vx, vy] of o.mask.points) {
+              ctx.fillStyle = '#e0f2fe';
+              ctx.strokeStyle = '#0284c7';
+              ctx.lineWidth = 1.5 / this.zoom;
+              ctx.beginPath();
+              ctx.arc(vx, vy, 4.5 / this.zoom, 0, Math.PI * 2);
+              ctx.fill();
+              ctx.stroke();
+            }
+          }
         } else {
           ctx.fillRect(o.bbox.x, o.bbox.y, o.bbox.w, o.bbox.h);
           ctx.strokeStyle = isSelected ? '#38bdf8' : '#94a3b8';

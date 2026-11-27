@@ -42,9 +42,10 @@ def validate_glb_header(data: bytes) -> None:
 
 def main() -> int:
     parser = argparse.ArgumentParser(description="Build a private standalone Frozen Aperture HTML player.")
-    parser.add_argument("--asset", required=True, help="Path to operator-supplied self-contained GLB asset.")
-    parser.add_argument("--source", required=True, help="Path to operator-supplied source illustration (PNG/JPEG/WebP).")
-    parser.add_argument("--expected-sha256", required=True, help="Expected SHA-256 hex digest of the GLB asset.")
+    parser.add_argument("--manifest", help="Path to a multi-body private scene manifest JSON (alternative to --asset/--source).")
+    parser.add_argument("--asset", help="Path to operator-supplied self-contained GLB asset.")
+    parser.add_argument("--source", help="Path to operator-supplied source illustration (PNG/JPEG/WebP).")
+    parser.add_argument("--expected-sha256", help="Expected SHA-256 hex digest of the GLB asset.")
     parser.add_argument("--output", required=True, help="Output path (recommended: *.local.html, excluded from Git).")
     parser.add_argument("--name", default="Frozen Aperture — Private Build", help="Project display name.")
     args = parser.parse_args()
@@ -55,9 +56,17 @@ def main() -> int:
         print("Error: index.html not found. Run `npm run build` first.", file=sys.stderr)
         return 1
 
+    out_path = Path(args.output).expanduser().resolve()
+
+    if args.manifest:
+        return build_from_manifest(Path(args.manifest).expanduser().resolve(), base_html_path, out_path, args.name)
+
+    if not args.asset or not args.source or not args.expected_sha256:
+        print("Error: Either --manifest OR (--asset, --source, --expected-sha256) are required.", file=sys.stderr)
+        return 1
+
     asset_path = Path(args.asset).expanduser().resolve()
     source_path = Path(args.source).expanduser().resolve()
-    out_path = Path(args.output).expanduser().resolve()
 
     if not asset_path.is_file():
         print(f"Error: GLB asset not found: {asset_path}", file=sys.stderr)
@@ -263,6 +272,148 @@ def main() -> int:
     print(f"Built private standalone HTML: {out_path} ({len(out_html) // 1024} KB)")
     print(f"Verified GLB SHA-256: {actual_glb_sha}")
     print(f"Recorded Source SHA-256: {src_sha}")
+    return 0
+
+
+def build_from_manifest(manifest_path: Path, base_html_path: Path, out_path: Path, default_name: str) -> int:
+    if not manifest_path.is_file():
+        print(f"Error: Manifest not found: {manifest_path}", file=sys.stderr)
+        return 1
+
+    manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+    base_dir = manifest_path.parent
+    now = datetime.now(timezone.utc).isoformat()
+
+    src_info = None
+    if manifest.get("source"):
+        sp = (base_dir / manifest["source"]).resolve()
+        if not sp.is_file():
+            print(f"Error: Manifest source image not found: {sp}", file=sys.stderr)
+            return 1
+        src_bytes = sp.read_bytes()
+        src_sha = sha256_bytes(src_bytes)
+        if manifest.get("sourceSha256") and src_sha.lower() != manifest["sourceSha256"].lower():
+            print(f"Error: Source SHA-256 mismatch ({src_sha}).", file=sys.stderr)
+            return 1
+        mime_type, _ = mimetypes.guess_type(str(sp))
+        if not mime_type or not mime_type.startswith("image/"):
+            mime_type = "image/png"
+        src_info = {
+            "name": sp.name,
+            "mimeType": mime_type,
+            "byteLength": len(src_bytes),
+            "width": int(manifest.get("sourceWidth", 1600)),
+            "height": int(manifest.get("sourceHeight", 1000)),
+            "sha256": src_sha,
+            "dataUrl": f"data:{mime_type};base64,{base64.b64encode(src_bytes).decode('ascii')}",
+            "ingestedAt": now,
+        }
+
+    assets = []
+    scene_objects = []
+    for idx, entry in enumerate(manifest.get("objects", [])):
+        obj_id = entry.get("id") or f"obj_manifest_{idx + 1:03d}"
+        asset_id = None
+        rep_type = entry.get("representationType", "procedural_geometry")
+
+        if entry.get("glb"):
+            gp = (base_dir / entry["glb"]).resolve()
+            if not gp.is_file():
+                print(f"Error: Manifest GLB not found for {obj_id}: {gp}", file=sys.stderr)
+                return 1
+            glb_bytes = gp.read_bytes()
+            actual_sha = sha256_bytes(glb_bytes)
+            expected_sha = entry.get("expectedSha256")
+            if not expected_sha or actual_sha.lower() != expected_sha.strip().lower():
+                print(f"Error: GLB SHA-256 mismatch for {obj_id}: expected {expected_sha}, got {actual_sha}", file=sys.stderr)
+                return 1
+            validate_glb_header(glb_bytes)
+            asset_id = f"asset_{obj_id}_{actual_sha[:8]}"
+            rep_type = "volumetric_rigid_mesh"
+            assets.append({
+                "id": asset_id,
+                "revision": 1,
+                "label": gp.name,
+                "format": "glb",
+                "sha256": actual_sha,
+                "byteLength": len(glb_bytes),
+                "sourceObjectId": entry.get("sourceObjectId"),
+                "componentSlot": entry.get("componentSlot", "full"),
+                "provider": "operator_manifest_build",
+                "rights": "private_operator_supplied",
+                "publicationAllowed": False,
+                "surfaceClassification": "observed",
+                "lifecycleState": "prototype_approved",
+                "validation": {"valid": True, "errors": [], "warnings": [], "stats": {"byteLength": len(glb_bytes)}, "checkedAt": now},
+                "history": [{"at": now, "from": None, "to": "prototype_approved", "reason": "Verified SHA-256 via scripts/build.py --manifest"}],
+                "embeddedBase64": base64.b64encode(glb_bytes).decode("ascii"),
+                "createdAt": now,
+                "modifiedAt": now,
+            })
+
+        scene_objects.append({
+            "id": obj_id,
+            "label": entry.get("label", obj_id),
+            "category": entry.get("category", "figure"),
+            "isVortex": bool(entry.get("isVortex", False)),
+            "representationType": rep_type,
+            "assetId": asset_id,
+            "sourceObjectId": entry.get("sourceObjectId"),
+            "position": entry.get("position", [0, 1.2, 0]),
+            "rotation": entry.get("rotation", [0, 0, 0]),
+            "scale": entry.get("scale", [1, 1, 1]),
+            "pivot": [0, 0, 0],
+            "parentId": None,
+            "temporalState": entry.get("temporalState", "held"),
+            "velocity": entry.get("velocity", [0, 0, 0]),
+            "angularVelocity": entry.get("angularVelocity", [0, 0, 0]),
+            "collision": entry.get("collision", {"shape": "capsule", "radius": 0.45, "halfHeight": 0.55, "enabled": True}),
+            "physics": entry.get("physics", {"mass": 2.0, "restitution": 0.35, "gravityScale": 1.0, "isStatic": False}),
+            "material": entry.get("material", {"color": "#38bdf8", "emissive": "#000000", "roughness": 0.4, "metalness": 0.3}),
+            "visible": True,
+            "interactive": True,
+        })
+
+    project_doc = {
+        "schemaVersion": "1.0.0",
+        "project": {
+            "id": manifest.get("id", "proj_private_manifest"),
+            "name": manifest.get("name", default_name),
+            "revision": 1,
+            "createdAt": now,
+            "modifiedAt": now,
+            "isPublicFixture": False,
+            "activeSceneId": "scene_main",
+            "sourceIllustration": src_info,
+        },
+        "sourceObjects": manifest.get("sourceObjects", []),
+        "assets": assets,
+        "scenes": [{
+            "id": "scene_main",
+            "name": manifest.get("sceneName", "Private Multi-Body Scene"),
+            "coordinateSystem": {"units": "meters", "upAxis": "Y", "handedness": "right"},
+            "cameras": manifest.get("cameras", {
+                "sourceCamera": {"projection": "perspective", "fovDeg": 42, "near": 0.1, "far": 200, "position": [0, 1.8, 12.5], "target": [0, 1.4, 0], "up": [0, 1, 0], "imageWidth": 1600, "imageHeight": 1000, "calibrated": True, "landmarks": []},
+                "namedViews": [
+                    {"id": "source", "label": "Source View", "position": [0, 1.8, 12.5], "target": [0, 1.4, 0], "fovDeg": 42},
+                    {"id": "rear", "label": "Rear Inspection", "position": [0, 2.0, -12.0], "target": [0, 1.4, 0], "fovDeg": 42},
+                ],
+                "bookmarks": [],
+            }),
+            "environment": {"backgroundColor": "#05070c", "fogDensity": 0.018, "floorReflectivity": 0.35, "vortexId": manifest.get("vortexId")},
+            "objects": scene_objects,
+            "simulation": {"fixedDt": 1 / 60, "gravity": [0, -9.81, 0], "linearDamping": 0.04, "angularDamping": 0.08, "restitution": 0.42, "contactActivationImpulseThreshold": 0.15, "seed": 20261126, "tick": 0, "initialState": [], "tickLog": [], "contactEvents": []},
+        }],
+        "jobs": [],
+        "settings": {"qualityTier": "high", "reducedMotion": False, "audioMuted": False, "audioVolume": 0.55, "defaultExperienceMode": "frozen_second"},
+    }
+
+    safe_json = json.dumps(project_doc).replace("</script", "<\\/script")
+    injection = f"<script>window.__FROZEN_APERTURE_EMBEDDED_PROJECT__ = {safe_json};</script>"
+    base_html = base_html_path.read_text(encoding="utf-8")
+    out_html = base_html.replace("</head>", f"{injection}\n</head>", 1)
+    out_path.write_text(out_html, encoding="utf-8")
+    print(f"Built multi-body private HTML: {out_path} ({len(scene_objects)} objects, {len(assets)} verified GLBs)")
     return 0
 
 

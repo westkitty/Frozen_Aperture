@@ -302,6 +302,69 @@ async function run() {
     screenshots.push(await cdp.screenshot('10-mobile-viewport.png'));
     record('Mobile-width viewport (390x844) renders without crash', true);
 
+    // Restore desktop viewport for #25 gesture, keyboard, visual-diff, gizmo & 114-body stress tests
+    await cdp.send('Emulation.setDeviceMetricsOverride', {
+      width: 1280, height: 800, deviceScaleFactor: 1, mobile: false,
+    });
+    await cdp.eval(`(() => {
+      const api = window.__FROZEN_APERTURE__;
+      api.setQualityTier('high');
+      api.setReducedMotion(false);
+      api.setWorkbenchOpen(false);
+      api.reset();
+    })()`);
+    await sleep(200);
+
+    // (#25) Real CDP Mouse Orbit-Drag Gesture Test: dragging across canvas must NOT release any frozen body
+    await cdp.send('Input.dispatchMouseEvent', { type: 'mousePressed', x: 640, y: 400, button: 'left', clickCount: 1 });
+    await cdp.send('Input.dispatchMouseEvent', { type: 'mouseMoved', x: 780, y: 360, button: 'left' });
+    await cdp.send('Input.dispatchMouseEvent', { type: 'mouseReleased', x: 780, y: 360, button: 'left', clickCount: 1 });
+    await sleep(120);
+    const afterDragActive = await cdp.eval(`window.__FROZEN_APERTURE__.getSimStats().counts.active`);
+    record('CDP orbit drag gesture does NOT accidentally release frozen objects (#25)', afterDragActive === 0, `active=${afterDragActive}`);
+
+    // (#23) Real CDP Keyboard-First Tab + Space temporal release test
+    await cdp.send('Input.dispatchKeyEvent', { type: 'keyDown', key: 'Tab', code: 'Tab' });
+    await cdp.send('Input.dispatchKeyEvent', { type: 'keyUp', key: 'Tab', code: 'Tab' });
+    await cdp.send('Input.dispatchKeyEvent', { type: 'keyDown', key: ' ', code: 'Space' });
+    await cdp.send('Input.dispatchKeyEvent', { type: 'keyUp', key: ' ', code: 'Space' });
+    await sleep(120);
+    const afterKeyActive = await cdp.eval(`window.__FROZEN_APERTURE__.getSimStats().counts.active`);
+    record('Keyboard Tab + Space cycles focus and toggles temporal state (#23)', afterKeyActive >= 1, `active=${afterKeyActive}`);
+
+    // (#19) On-demand idle rendering check: reset to frozen, wait 350ms, verify idleFramesSkipped > 0
+    await cdp.eval(`window.__FROZEN_APERTURE__.reset()`);
+    await sleep(450);
+    const idleInfo = await cdp.eval(`window.__FROZEN_APERTURE__.getTelemetry()`);
+    record('On-demand idle rendering skips redundant GPU frames when static (#19)', idleInfo.idleFramesSkipped > 0, `skipped=${idleInfo.idleFramesSkipped}`);
+
+    // (#25) Visual pixel-diff check between Shaded and Wireframe captures
+    const shadedBuf = fs.readFileSync(path.join(screenshotsDir, '01-opening-immersive-play.png'));
+    const wireBuf = fs.readFileSync(path.join(screenshotsDir, '05-volumetric-wireframe-inspection.png'));
+    const shaShaded = crypto.createHash('sha256').update(shadedBuf).digest('hex');
+    const shaWire = crypto.createHash('sha256').update(wireBuf).digest('hex');
+    record('Visual pixel-diff confirms distinct Shaded vs Wireframe renders (#25)', shaShaded !== shaWire);
+
+    // (#16, #22) 3D Transform Gizmo activation + .fap.zip export in browser
+    const gizmoZip = await cdp.eval(`(() => {
+      const api = window.__FROZEN_APERTURE__;
+      api.setWorkbenchOpen(true, 'assembly');
+      api.setGizmoMode('translate', true);
+      const zipSize = api.exportZipBundleSize();
+      api.setGizmoMode('off', false);
+      api.setWorkbenchOpen(false);
+      return { zipSize };
+    })()`);
+    record('3D TransformControls gizmo (#16) and .fap.zip bundle export (#22) work in browser', gizmoZip.zipSize > 1000, `zipBytes=${gizmoZip.zipSize}`);
+
+    // (#24, #25) 114-Body Instanced Stress Benchmark
+    const stress = await cdp.eval(`window.__FROZEN_APERTURE__.loadStressScene114()`);
+    await sleep(200);
+    screenshots.push(await cdp.screenshot('11-stress-114-bodies-instanced.png'));
+    record('114-body stress scene renders with InstancedMesh draw-call batching (#24, #25)',
+      stress.totalObjects === 114 && stress.telemetry.instancedCount >= 100 && stress.telemetry.drawCalls < 45,
+      `objects=${stress.totalObjects}, instanced=${stress.telemetry.instancedCount}, drawCalls=${stress.telemetry.drawCalls}`);
+
     // Performance metrics (clearly labeled as headless software WebGL / SwiftShader)
     const perf = await cdp.eval(`window.__FROZEN_APERTURE__.getTelemetry()`);
     const times = (perf.frameTimesMs || []).filter(n => n > 0).sort((a, b) => a - b);

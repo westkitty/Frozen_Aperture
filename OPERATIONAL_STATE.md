@@ -41,24 +41,30 @@ Before modifying any files, the repository, Git history, GitHub metadata, and co
 - **Two Distinct Presentation Modes** (`src/main.js`, `src/styles.css`): Minimalist Immersive Play Mode (no permanent HUD) + 8-stage Authoring Workbench (`SOURCE → OBJECTS → RECONSTRUCTION → ASSEMBLY → SIMULATION → VALIDATION → PLAY → EXPORT`) + 5 Experience Modes (`frozen_second`, `living_illustration`, `world_explorer`, `object_lab`, `scene_assembly`).
 - **Persistence & Offline Export** (`src/core/project-store.js`, `src/export/offline-exporter.js`, `scripts/build.mjs`, `scripts/build.py`): Browser `localStorage` revisions, portable JSON import/export, standalone offline HTML export (`index.html`), and private CLI builder (`scripts/build.py`).
 
+- **25-Point Upgrade Milestone Completed**:
+  - Source & Alignment: Binary PNG mask import + feathering/dilation/erosion (`#1`), interactive polygon vertex drag/insert/delete (`#2`), 2D-to-3D landmark camera calibrator (`#3`), Silhouette IoU & heatmap comparator (`#4`), disocclusion background plate inpainter (`#5`).
+  - Reconstruction & Assets: Live DexDiffusion polling & auto-download/validation (`#6`), World/SHARP worker probe & project submission (`#7`), side-by-side candidate comparator (`#8`), multi-component asset slots (`#9`), source-derived vertex color projection baker (`#10`), auto-fit collision proxies from GLB bounds (`#13`), multi-body `scripts/build.py --manifest` (`#15`).
+  - Physics & Simulation: Swept CCD anti-tunneling (`#11`), rotation-aware OBB SAT & compound multi-primitive proxies (`#12`), inertia/torque/Coulomb friction/sleeping (`#14`), render-state interpolation (`#18`).
+  - Rendering, Audio & UX: Interactive 3D `TransformControls` gizmos with snap (`#16`), custom glossy black-liquid Central Aperture GLSL shader (`#17`), bounded motion trails (`#18`), true on-demand idle rendering (`#19`), HRTF 3D spatial audio & velocity-layered foley (`#20`), IndexedDB binary asset store (`#21`), portable `.fap.zip` bundle export/import (`#22`), keyboard-first `Tab`/`Space` object cycling & 3D selection ring (`#23`), `THREE.InstancedMesh` batching for 114+ body scenes (`#24`), and CDP drag-vs-tap gesture, visual diff, and 114-body stress tests (`#25`).
+
 ---
 
 ## 3. Verification Status
 
 - `npm run fixtures`: Generates public deterministic Fixtures A–E (`fixtures/fixture-*.json`).
-- `npm run check`: Syntax validation across all JS/MJS modules.
-- `npm test`: 13/13 automated unit & integration tests passing.
-- `npm run test:browser`: 10/10 headless Chromium WebGL 2 acceptance checks passing (`file://` offline load, zero external requests, zero uncaught errors), machine-readable report at `reports/validation-report.json`.
+- `npm run check`: Syntax validation across 30 JS/MJS modules.
+- `npm test`: **21/21** automated unit & integration tests passing.
+- `npm run test:browser`: **16/16** headless Chromium WebGL 2 acceptance checks passing (`file://` offline load, zero external requests, zero uncaught errors, CDP drag-vs-tap gesture safety, keyboard `Tab`/`Space`, on-demand idle frame skipping, 114-body instanced stress scene at 39 draw calls), machine-readable report at `reports/validation-report.json`.
 - **Unverified / Externally Blocked**:
   - Private APERTURE 114-body scene and approved 31,576-vertex Azure Sentinel GLB could not be tested in this cloud VM because the private files are located on the user's MacBook / Big Mac and are excluded from public Git.
   - Physical MacBook GPU and physical mobile device frame pacing have not been measured (browser QA ran on headless Linux SwiftShader software WebGL 2).
-  - Live DexDiffusion Big Mac 3D worker execution was not run from the cloud VM (Big Mac LAN/Tailscale endpoint is not reachable from the remote VM).
+  - Live DexDiffusion Big Mac 3D worker execution was not run from the cloud VM (unit-tested via mocked `fetchImpl` against verified endpoints).
 
 ---
 
 ## 4. Next Recommended Operator Steps
 
 1. Pull `main` on the MacBook and run `npm ci && npm run build && npm test`.
-2. Open `index.html` in a hardware-accelerated browser and test the Public Calibration Scene + Workbench.
-3. Build a private local test player using `scripts/build.py` with the approved `azure_sentinel_source_color.glb` and original APERTURE illustration (outputs `*.local.html`, gitignored).
-4. Optionally configure the Big Mac DexDiffusion URL in Workbench → `Reconstruction` to probe `GET /api/3d/workers` and run a single bounded candidate reconstruction experiment.
+2. Open `index.html` in a hardware-accelerated browser and test the Public Calibration Scene, 3D Transform Gizmos, Silhouette IoU, and `.fap.zip` export.
+3. Build a private local test player using `scripts/build.py --manifest ...` (or `--asset`/`--source`) with the approved `azure_sentinel_source_color.glb` and original APERTURE illustration (outputs `*.local.html`, gitignored).
+4. Optionally configure the Big Mac DexDiffusion URL in Workbench → `Reconstruction` to probe `GET /api/3d/workers` and `GET /api/world/workers` before running a single bounded candidate job.
