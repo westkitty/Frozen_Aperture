@@ -1,27 +1,66 @@
 # Frozen Aperture
 
-An independent illustration-to-playable-world research lab. A scene is a collection of persistent objects, not a single decorative image. Its first experience is selective local time: touch a suspended body, let contact awaken neighbors, suspend again, undo, restore, or inspect the volume from another angle.
+An independent illustration-to-playable-world research lab and compiler. A scene is a collection of persistent objects, not a single decorative image. Its first experience is selective local time (**Frozen Second**): touch a suspended body, let contact awaken neighbors, suspend again, undo, restore, or inspect the volume from another angle.
 
-## Run
+## Quick Start (Offline Standalone Player)
 
-Open [index.html](index.html) in a hardware-accelerated browser. No server or network is required for this checked-in build. The public calibration solid is synthetic; the source-region tool is a rectangular crop, not automatic semantic segmentation. Import a self-contained GLB to inspect a real asset. The baseline does not perform reconstruction itself.
+Open [index.html](index.html) directly in a hardware-accelerated WebGL 2 browser. **No server or network connection is required.**
 
-- Drag to orbit; pinch or scroll to zoom.
-- Click a body to release or suspend it; use the object controls for keyboard operation.
-- Reverse view and wireframe reveal real mesh geometry.
-- Release the impact weight for a three-body contact test. Undo or restore to repeat.
-- Import your own image and save a rectangular region for reconstruction in your chosen provider.
+The checked-in build ships a **Public Synthetic Calibration Scene** (central black-liquid aperture vortex, 10 synthetic calibration figure slots including a genuine watertight volumetric GLB solid, a deterministic three-body impact test, and orbiting fragments). Private APERTURE artwork and generated private meshes are intentionally excluded from public Git.
 
-## Rebuild
+### Immersive Play Controls
+- **Drag** to orbit; **scroll / pinch** to zoom (camera gestures never accidentally release objects).
+- **Click / tap** any body to release or suspend its local time.
+- **Impact Test** releases the impact weight for a deterministic three-body contact chain; **Undo** or **Reset** to repeat.
+- Switch experience modes (`Frozen Second`, `Living Illustration`, `World Explorer`, `Object Lab`, `Scene Assembly`), inspection shading (`Shaded`, `Clay`, `Wireframe`), quality tiers (`High`, `Balanced`, `Economy`), `Motion` (reduced-motion), and spatial `Audio`.
+- Click **Workbench** to enter the 8-stage Authoring Workbench (`SOURCE → OBJECTS → RECONSTRUCTION → ASSEMBLY → SIMULATION → VALIDATION → PLAY → EXPORT`).
 
-Use Node.js and Python 3. Install the pinned direct dependencies with npm, then run npm run build. npm run check checks JavaScript syntax. Set CHROMIUM_BIN to your installed Chromium-compatible executable and run npm run test:browser for the baseline browser test. The existing build requires WebGL 2.
+## Build & Test from Clean Checkout
 
-For an operator-supplied private GLB/image pair, run:
+Requires **Node.js 22+** and **Python 3.10+**.
 
-    python3 scripts/build.py --asset /path/to/asset.glb --source /path/to/source.png --expected-sha256 <asset-hash> --output private-sample.local.html
+```bash
+# 1. Install pinned dependencies
+npm ci
 
-Private builds and runtime captures are excluded from Git. The prior local demo used an actual DexDiffusion textured GLB (320,416 positions, 578,300 triangles) and passed the three-body test. Its bytes and source image are intentionally not published here.
+# 2. Generate deterministic public test fixtures (A-E)
+npm run fixtures
 
-## Direction
+# 3. Build standalone offline index.html (zero external network deps)
+npm run build
 
-The render world, reconstruction provider, and time simulation must be independent. DexDiffusion is a potential provider, never a required dependency of the standalone player. The present runtime uses simple sphere contacts and is not a production physics solver. It does not yet demonstrate reconstruction of the original APERTURE ten-figure illustration, automatic scene assembly, rigging, or learned depth. See [operational state](OPERATIONAL_STATE.md), [project bible](Frozen_Aperture_bible.md), and [adversarial review](docs/adversarial-review.md).
+# 4. Syntax check + automated regression suite
+npm run check
+npm test
+
+# 5. Headless Chromium WebGL 2 browser acceptance & visual QA
+CHROMIUM_BIN=/usr/bin/google-chrome npm run test:browser
+```
+
+## Building a Private Local Player (Operator-Supplied Assets)
+
+For an operator-supplied private GLB/image pair (kept strictly local and excluded from Git via `*.local.html`):
+
+```bash
+python3 scripts/build.py \
+  --asset /path/to/asset.glb \
+  --source /path/to/source.png \
+  --expected-sha256 <asset-sha256> \
+  --output private-sample.local.html
+```
+
+## Architecture & Documentation
+
+- [Project Bible](Frozen_Aperture_bible.md) — Architectural laws, temporal integrity, and authoring pipeline.
+- [Operational State](OPERATIONAL_STATE.md) — Baseline recovery, verified results, missing private dependencies, and next steps.
+- [Adversarial Review & Defect Register](docs/adversarial-review.md) — Readiness audit and severity-classified open issues.
+- [Validation Report](reports/validation-report.json) — Machine-readable browser acceptance & telemetry evidence.
+
+### Core Modules
+- `src/core/` — Versioned `v1.0.0` project/scene schema, migration, SHA-256 hashing, security/budget guards, persistence store.
+- `src/source/` — Validated image ingestion and 2D segmentation workbench (rect/polygon masks, overlaps, alpha crop export).
+- `src/assets/` — Binary glTF 2.0 / GLB structural & topology validator, asset lifecycle manager, reversible replacement, synthetic GLB builder.
+- `src/providers/` — Replaceable reconstruction provider interface (`ManualGlbProvider` offline + read-only-verified `DexDiffusionAdapter`).
+- `src/simulation/` — Fixed-step (`1/60s`) selective local-time physics engine, spatial-hash broadphase, undo/reset/deterministic replay.
+- `src/render/` — Three.js WebGL 2 renderer (offline GLB parsing, glossy Central Aperture, inspection modes, bounded VFX) + procedural Web Audio.
+- `src/export/` — Standalone offline HTML exporter.

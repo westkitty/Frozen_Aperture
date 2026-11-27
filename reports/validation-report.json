@@ -1,0 +1,90 @@
+{
+  "generatedAt": "2026-11-27T06:50:47.425Z",
+  "environment": {
+    "browser": "Chrome/158.0.8127.36",
+    "renderingBackend": "Headless Chromium ANGLE SwiftShader (software WebGL 2 — NOT physical GPU/mobile benchmark)",
+    "viewportDesktop": "1280x800",
+    "viewportMobile": "390x844"
+  },
+  "artifact": {
+    "path": "index.html",
+    "sha256": "c400051a377b1df2863aac5dcf53e4fcb011c01f1be589fe408b74af144693e6",
+    "bytes": 737737
+  },
+  "checks": [
+    {
+      "name": "Offline file:// load with zero external network requests",
+      "passed": true,
+      "detail": "external=0"
+    },
+    {
+      "name": "Zero uncaught runtime exceptions on load",
+      "passed": true,
+      "detail": "errors=0"
+    },
+    {
+      "name": "10 calibration figure slots + Central Vortex + Volumetric GLB loaded",
+      "passed": true,
+      "detail": "objects=38, drawCalls=61, tris=23320"
+    },
+    {
+      "name": "Three-body contact chain propagates activation in live browser",
+      "passed": true,
+      "detail": "relay=active, anchor=active"
+    },
+    {
+      "name": "Undo and Reset restore frozen baseline state",
+      "passed": true,
+      "detail": ""
+    },
+    {
+      "name": "Central Aperture vortex initiates cascade when released",
+      "passed": true,
+      "detail": "active=15"
+    },
+    {
+      "name": "Clay, Wireframe, and 360-degree Rear inspection views render cleanly",
+      "passed": true,
+      "detail": ""
+    },
+    {
+      "name": "Authoring Workbench (Source, Segmentation, Assembly) functional",
+      "passed": true,
+      "detail": ""
+    },
+    {
+      "name": "Economy quality & Reduced Motion preserve identical simulation outcomes",
+      "passed": true,
+      "detail": "hash=8893a5f9, objects=38"
+    },
+    {
+      "name": "Mobile-width viewport (390x844) renders without crash",
+      "passed": true,
+      "detail": ""
+    }
+  ],
+  "passedCount": 10,
+  "failedCount": 0,
+  "performance": {
+    "note": "Measured under headless SwiftShader software WebGL 2; not representative of native hardware-accelerated GPU frame rates.",
+    "medianFrameTimeMs": 100,
+    "p95FrameTimeMs": 100,
+    "drawCalls": 49,
+    "triangles": 19116,
+    "geometries": 44,
+    "textures": 1,
+    "objectCount": 38
+  },
+  "screenshots": [
+    "reports/screenshots/01-opening-immersive-play.png",
+    "reports/screenshots/02-three-body-contact-chain.png",
+    "reports/screenshots/03-central-vortex-cascade.png",
+    "reports/screenshots/04-volumetric-clay-inspection.png",
+    "reports/screenshots/05-volumetric-wireframe-inspection.png",
+    "reports/screenshots/06-rear-inspection-view.png",
+    "reports/screenshots/07-workbench-source.png",
+    "reports/screenshots/08-workbench-segmentation.png",
+    "reports/screenshots/09-workbench-assembly.png",
+    "reports/screenshots/10-mobile-viewport.png"
+  ]
+}

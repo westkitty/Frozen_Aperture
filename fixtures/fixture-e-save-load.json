@@ -1,0 +1,54 @@
+{
+  "schemaVersion": "0.9.2",
+  "id": "fixture_e_legacy",
+  "name": "Fixture E — Legacy Migration & Replay",
+  "customUnknownExtensionField": {
+    "preserved": true,
+    "tag": "keep-me"
+  },
+  "objects": [
+    {
+      "id": "replay_orb",
+      "label": "Replay Orb",
+      "representationType": "procedural_geometry",
+      "position": [
+        0,
+        3,
+        0
+      ],
+      "rotation": [
+        0,
+        0,
+        0
+      ],
+      "scale": [
+        1,
+        1,
+        1
+      ],
+      "temporalState": "held",
+      "velocity": [
+        1.5,
+        0,
+        0
+      ],
+      "angularVelocity": [
+        0,
+        0.5,
+        0
+      ],
+      "collision": {
+        "shape": "sphere",
+        "radius": 0.4,
+        "enabled": true
+      },
+      "physics": {
+        "mass": 1,
+        "restitution": 0.5,
+        "gravityScale": 1,
+        "isStatic": false
+      },
+      "visible": true
+    }
+  ]
+}

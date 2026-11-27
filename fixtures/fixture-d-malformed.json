@@ -1,0 +1,88 @@
+{
+  "description": "Malformed inputs that must be cleanly rejected without corrupting valid project state.",
+  "cases": [
+    {
+      "id": "bad_schema_root",
+      "payload": "[]"
+    },
+    {
+      "id": "future_schema_major",
+      "payload": "{\"schemaVersion\":\"9.0.0\",\"project\":{\"id\":\"x\",\"name\":\"x\"},\"sourceObjects\":[],\"assets\":[],\"scenes\":[]}"
+    },
+    {
+      "id": "nan_position",
+      "payload": {
+        "schemaVersion": "1.0.0",
+        "project": {
+          "id": "x",
+          "name": "x"
+        },
+        "sourceObjects": [],
+        "assets": [],
+        "scenes": [
+          {
+            "id": "s",
+            "objects": [
+              {
+                "id": "o",
+                "position": [
+                  null,
+                  0,
+                  0
+                ],
+                "rotation": [
+                  0,
+                  0,
+                  0
+                ],
+                "scale": [
+                  1,
+                  1,
+                  1
+                ]
+              }
+            ]
+          }
+        ]
+      }
+    },
+    {
+      "id": "invalid_temporal_state",
+      "payload": {
+        "schemaVersion": "1.0.0",
+        "project": {
+          "id": "x",
+          "name": "x"
+        },
+        "sourceObjects": [],
+        "assets": [],
+        "scenes": [
+          {
+            "id": "s",
+            "objects": [
+              {
+                "id": "o",
+                "position": [
+                  0,
+                  0,
+                  0
+                ],
+                "rotation": [
+                  0,
+                  0,
+                  0
+                ],
+                "scale": [
+                  1,
+                  1,
+                  1
+                ],
+                "temporalState": "teleported"
+              }
+            ]
+          }
+        ]
+      }
+    }
+  ]
+}

@@ -1,0 +1,378 @@
+{
+  "schemaVersion": "1.0.0",
+  "project": {
+    "id": "fixture_c_mixed",
+    "name": "Fixture C — Mixed Layer & Mesh Replacement",
+    "revision": 1,
+    "createdAt": "2026-11-27T06:49:03.074Z",
+    "modifiedAt": "2026-11-27T06:49:03.074Z",
+    "isPublicFixture": true,
+    "activeSceneId": "scene_main",
+    "sourceIllustration": null
+  },
+  "sourceObjects": [],
+  "assets": [
+    {
+      "id": "asset_2823934dcc_mwymexkb",
+      "revision": 1,
+      "label": "Candidate A",
+      "format": "glb",
+      "sha256": "2823934dccfa14fd65755665d8e5756064c5282551968185dcef7196c8d58a23",
+      "byteLength": 3652,
+      "sourceObjectId": null,
+      "componentSlot": "body",
+      "parentAssetId": null,
+      "provider": "manual_glb_import",
+      "model": null,
+      "rights": "public_synthetic",
+      "publicationAllowed": true,
+      "surfaceClassification": "inferred",
+      "lifecycleState": "structurally_valid",
+      "validation": {
+        "valid": true,
+        "errors": [],
+        "warnings": [],
+        "stats": {
+          "byteLength": 3652,
+          "version": 2,
+          "meshCount": 1,
+          "primitiveCount": 1,
+          "vertexCount": 52,
+          "triangleCount": 100,
+          "degenerateTriangles": 0,
+          "materialCount": 1,
+          "textureCount": 0,
+          "hasUVs": false,
+          "hasNormals": true,
+          "hasVertexColors": true,
+          "bounds": {
+            "min": [
+              -0.40486687421798706,
+              -0.824999988079071,
+              -0.38505128026008606
+            ],
+            "max": [
+              0.40486687421798706,
+              0.824999988079071,
+              0.38505128026008606
+            ],
+            "size": [
+              0.8097337484359741,
+              1.649999976158142,
+              0.7701025605201721
+            ],
+            "center": [
+              0,
+              0,
+              0
+            ]
+          },
+          "topology": {
+            "analyzed": true,
+            "boundaryEdges": 0,
+            "nonManifoldEdges": 0,
+            "watertight": true
+          },
+          "extensionsUsed": [],
+          "extensionsRequired": []
+        },
+        "checkedAt": "2026-11-27T06:49:03.083Z"
+      },
+      "history": [
+        {
+          "at": "2026-11-27T06:49:03.083Z",
+          "from": null,
+          "to": "structurally_valid",
+          "reason": "Imported and passed structural GLB validation."
+        }
+      ],
+      "embeddedBase64": "Z2xURgIAAABEDgAAgAQAAEpTT057ImFzc2V0Ijp7InZlcnNpb24iOiIyLjAiLCJnZW5lcmF0b3IiOiJGcm96ZW5BcGVydHVyZS1TeW50aGV0aWNHTEIifSwic2NlbmUiOjAsInNjZW5lcyI6W3sibm9kZXMiOlswXX1dLCJub2RlcyI6W3sibWVzaCI6MCwibmFtZSI6IlJlcGxhY2VtZW50TWVzaEEifV0sIm1hdGVyaWFscyI6W3sibmFtZSI6IlJlcGxhY2VtZW50TWVzaEFfTWF0ZXJpYWwiLCJwYnJNZXRhbGxpY1JvdWdobmVzcyI6eyJiYXNlQ29sb3JGYWN0b3IiOlswLjI0LDAuNjIsMC45NSwxXSwibWV0YWxsaWNGYWN0b3IiOjAuMjUsInJvdWdobmVzc0ZhY3RvciI6MC40NX19XSwibWVzaGVzIjpbeyJuYW1lIjoiUmVwbGFjZW1lbnRNZXNoQSIsInByaW1pdGl2ZXMiOlt7ImF0dHJpYnV0ZXMiOnsiUE9TSVRJT04iOjAsIk5PUk1BTCI6MSwiQ09MT1JfMCI6Mn0sImluZGljZXMiOjMsIm1hdGVyaWFsIjowLCJtb2RlIjo0fV19XSwiYnVmZmVycyI6W3siYnl0ZUxlbmd0aCI6MjQ3Mn1dLCJidWZmZXJWaWV3cyI6W3siYnVmZmVyIjowLCJieXRlT2Zmc2V0IjowLCJieXRlTGVuZ3RoIjo2MjQsInRhcmdldCI6MzQ5NjJ9LHsiYnVmZmVyIjowLCJieXRlT2Zmc2V0Ijo2MjQsImJ5dGVMZW5ndGgiOjYyNCwidGFyZ2V0IjozNDk2Mn0seyJidWZmZXIiOjAsImJ5dGVPZmZzZXQiOjEyNDgsImJ5dGVMZW5ndGgiOjYyNCwidGFyZ2V0IjozNDk2Mn0seyJidWZmZXIiOjAsImJ5dGVPZmZzZXQiOjE4NzIsImJ5dGVMZW5ndGgiOjYwMCwidGFyZ2V0IjozNDk2M31dLCJhY2Nlc3NvcnMiOlt7ImJ1ZmZlclZpZXciOjAsImNvbXBvbmVudFR5cGUiOjUxMjYsImNvdW50Ijo1MiwidHlwZSI6IlZFQzMiLCJtaW4iOlstMC40MDQ4NjY4NzQyMTc5ODcwNiwtMC44MjQ5OTk5ODgwNzkwNzEsLTAuMzg1MDUxMjgw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16NIP4PASj6q8QI/16NIP4PASj6q8QI/16NIP4PASj6q8QI/16NIP4PASj6q8QI/16NIP4PASj6q8QI/16NIP4PASj6q8QI/16NIP4PASj6q8QI/16NIP4PASj6q8QI/16NIP4cWWT7iMww/oNNWP4cWWT7iMww/oNNWP4cWWT7iMww/oNNWP4cWWT7iMww/oNNWP4cWWT7iMww/oNNWP4cWWT7iMww/oNNWP4cWWT7iMww/oNNWP4cWWT7iMww/oNNWP4cWWT7iMww/oNNWP4cWWT7iMww/oNNWP4tsZz4adhU/agNlP4tsZz4adhU/agNlP4tsZz4adhU/agNlP4tsZz4adhU/agNlP4tsZz4adhU/agNlP4tsZz4adhU/agNlP4tsZz4adhU/agNlP4tsZz4adhU/agNlP4tsZz4adhU/agNlP4tsZz4adhU/agNlPwIrhz6Nly4/AACAPwAAAgABAAAAAwACAAAABAADAAAABQAEAAAABgAFAAAABwAGAAAACAAHAAAACQAIAAAACgAJAAAAAQAKAAEAAgAMAAEADAALAAIAAwANAAIADQAMAAMABAAOAAMADgANAAQABQAPAAQADwAOAAUABgAQAAUAEAAPAAYABwARAAYAEQAQAAcACAASAAcAEgARAAgACQATAAgAEwASAAkACgAUAAkAFAATAAoAAQALAAoACwAUAAsADAAWAAsAFgAVAAwADQAXAAwAFwAWAA0ADgAYAA0AGAAXAA4ADwAZAA4AGQAYAA8AEAAaAA8AGgAZABAAEQAbABAAGwAaABEAEgAcABEAHAAbABIAEwAdABIAHQAcABMAFAAeABMAHgAdABQACwAVABQAFQAeABUAFgAgABUAIAAfABYAFwAhABYAIQAgABcAGAAiABcAIgAhABgAGQAjABgAIwAiABkAGgAkABkAJAAjABoAGwAlABoAJQAkABsAHAAmABsAJgAlABwAHQAnABwAJwAmAB0AHgAoAB0AKAAnAB4AFQAfAB4AHwAoAB8AIAAqAB8AKgApACAAIQArACAAKwAqACEAIgAsACEALAArACIAIwAtACIALQAsACMAJAAuACMALgAtACQAJQAvACQALwAuACUAJgAwACUAMAAvACYAJwAxACYAMQAwACcAKAAyACcAMgAxACgAHwApACgAKQAyACkAKgAzACoAKwAzACsALAAzACwALQAzAC0ALgAzAC4ALwAzAC8AMAAzADAAMQAzADEAMgAzADIAKQAzAA==",
+      "createdAt": "2026-11-27T06:49:03.083Z",
+      "modifiedAt": "2026-11-27T06:49:03.083Z"
+    },
+    {
+      "id": "asset_27d311c688_mwymexkb",
+      "revision": 1,
+      "label": "Candidate B",
+      "format": "glb",
+      "sha256": "27d311c688e2e1c60ef38734a7147db5387b63d45d8b245c13c18c96d729ef3e",
+      "byteLength": 1132,
+      "sourceObjectId": null,
+      "componentSlot": "body",
+      "parentAssetId": null,
+      "provider": "manual_glb_import",
+      "model": null,
+      "rights": "public_synthetic",
+      "publicationAllowed": true,
+      "surfaceClassification": "inferred",
+      "lifecycleState": "structurally_valid",
+      "validation": {
+        "valid": true,
+        "errors": [],
+        "warnings": [],
+        "stats": {
+          "byteLength": 1132,
+          "version": 2,
+          "meshCount": 1,
+          "primitiveCount": 1,
+          "vertexCount": 6,
+          "triangleCount": 8,
+          "degenerateTriangles": 0,
+          "materialCount": 1,
+          "textureCount": 0,
+          "hasUVs": false,
+          "hasNormals": true,
+          "hasVertexColors": false,
+          "bounds": {
+            "min": [
+              -0.5,
+              -0.5,
+              -0.5
+            ],
+            "max": [
+              0.5,
+              0.5,
+              0.5
+            ],
+            "size": [
+              1,
+              1,
+              1
+            ],
+            "center": [
+              0,
+              0,
+              0
+            ]
+          },
+          "topology": {
+            "analyzed": true,
+            "boundaryEdges": 0,
+            "nonManifoldEdges": 0,
+            "watertight": true
+          },
+          "extensionsUsed": [],
+          "extensionsRequired": []
+        },
+        "checkedAt": "2026-11-27T06:49:03.083Z"
+      },
+      "history": [
+        {
+          "at": "2026-11-27T06:49:03.083Z",
+          "from": null,
+          "to": "structurally_valid",
+          "reason": "Imported and passed structural GLB validation."
+        }
+      ],
+      "embeddedBase64": "Z2xURgIAAABsBAAAkAMAAEpTT057ImFzc2V0Ijp7InZlcnNpb24iOiIyLjAiLCJnZW5lcmF0b3IiOiJGcm96ZW5BcGVydHVyZS1TeW50aGV0aWNHTEIifSwic2NlbmUiOjAsInNjZW5lcyI6W3sibm9kZXMiOlswXX1dLCJub2RlcyI6W3sibWVzaCI6MCwibmFtZSI6IlJlcGxhY2VtZW50TWVzaEIifV0sIm1hdGVyaWFscyI6W3sibmFtZSI6IlJlcGxhY2VtZW50TWVzaEJfTWF0ZXJpYWwiLCJwYnJNZXRhbGxpY1JvdWdobmVzcyI6eyJiYXNlQ29sb3JGYWN0b3IiOlswLjg1LDAuMzIsMC40NSwxXSwibWV0YWxsaWNGYWN0b3IiOjAuMjUsInJvdWdobmVzc0ZhY3RvciI6MC40NX19XSwibWVzaGVzIjpbeyJuYW1lIjoiUmVwbGFjZW1lbnRNZXNoQiIsInByaW1pdGl2ZXMiOlt7ImF0dHJpYnV0ZXMiOnsiUE9TSVRJT04iOjAsIk5PUk1BTCI6MX0sImluZGljZXMiOjIsIm1hdGVyaWFsIjowLCJtb2RlIjo0fV19XSwiYnVmZmVycyI6W3siYnl0ZUxlbmd0aCI6MTkyfV0sImJ1ZmZlclZpZXdzIjpbeyJidWZmZXIiOjAsImJ5dGVPZmZzZXQiOjAsImJ5dGVMZW5ndGgiOjcyLCJ0YXJnZXQiOjM0OTYyfSx7ImJ1ZmZlciI6MCwiYnl0ZU9mZnNldCI6NzIsImJ5dGVMZW5ndGgiOjcyLCJ0YXJnZXQiOjM0OTYyfSx7ImJ1ZmZlciI6MCwiYnl0ZU9mZnNldCI6MTQ0LCJieXRlTGVuZ3RoIjo0OCwidGFyZ2V0IjozNDk2M31dLCJhY2Nlc3NvcnMiOlt7ImJ1ZmZlclZpZXciOjAsImNvbXBvbmVudFR5cGUiOjUxMjYsImNvdW50Ijo2LCJ0eXBlIjoiVkVDMyIsIm1pbiI6Wy0wLjUsLTAuNSwtMC41XSwibWF4IjpbMC41LDAuNSwwLjVdfSx7ImJ1ZmZlclZpZXciOjEsImNvbXBvbmVudFR5cGUiOjUxMjYsImNvdW50Ijo2LCJ0eXBlIjoiVkVDMyJ9LHsiYnVmZmVyVmlldyI6MiwiY29tcG9uZW50VHlwZSI6NTEyMywiY291bnQiOjI0LCJ0eXBlIjoiU0NBTEFSIn1dfSDAAAAAQklOAAAAAAAAAAA/AAAAAAAAAD8AAAAAAAAAAAAAAAAAAAAAAAAAPwAAAL8AAAAAAAAAAAAAAAAAAAAAAAAAvwAAAAAAAAC/AAAAAAAAAAAAAIA/AAAAAAAAgD8AAAAAAAAAAAAAAAAAAAAAAACAPwAAgL8AAAAAAAAAAAAAAAAAAAAAAACAvwAAAAAAAIC/AAAAAAAAAgABAAAAAwACAAAABAADAAAAAQAEAAUAAQACAAUAAgADAAUAAwAEAAUABAABAA==",
+      "createdAt": "2026-11-27T06:49:03.083Z",
+      "modifiedAt": "2026-11-27T06:49:03.083Z"
+    }
+  ],
+  "scenes": [
+    {
+      "id": "scene_main",
+      "name": "Primary Scene",
+      "coordinateSystem": {
+        "units": "meters",
+        "upAxis": "Y",
+        "handedness": "right"
+      },
+      "cameras": {
+        "sourceCamera": {
+          "projection": "perspective",
+          "fovDeg": 42,
+          "near": 0.1,
+          "far": 200,
+          "position": [
+            0,
+            1.8,
+            12.5
+          ],
+          "target": [
+            0,
+            1.4,
+            0
+          ],
+          "up": [
+            0,
+            1,
+            0
+          ],
+          "imageWidth": 1600,
+          "imageHeight": 1000,
+          "calibrated": true,
+          "landmarks": []
+        },
+        "namedViews": [
+          {
+            "id": "source",
+            "label": "Source View",
+            "position": [
+              0,
+              1.8,
+              12.5
+            ],
+            "target": [
+              0,
+              1.4,
+              0
+            ],
+            "fovDeg": 42
+          },
+          {
+            "id": "side_left",
+            "label": "Side Left",
+            "position": [
+              -11.5,
+              2.2,
+              2.5
+            ],
+            "target": [
+              0,
+              1.4,
+              0
+            ],
+            "fovDeg": 42
+          },
+          {
+            "id": "side_right",
+            "label": "Side Right",
+            "position": [
+              11.5,
+              2.2,
+              2.5
+            ],
+            "target": [
+              0,
+              1.4,
+              0
+            ],
+            "fovDeg": 42
+          },
+          {
+            "id": "rear",
+            "label": "Rear Inspection",
+            "position": [
+              0,
+              2.4,
+              -12
+            ],
+            "target": [
+              0,
+              1.4,
+              0
+            ],
+            "fovDeg": 42
+          },
+          {
+            "id": "overhead",
+            "label": "Overhead",
+            "position": [
+              0,
+              13.5,
+              2.5
+            ],
+            "target": [
+              0,
+              0.8,
+              0
+            ],
+            "fovDeg": 46
+          }
+        ],
+        "bookmarks": []
+      },
+      "environment": {
+        "backgroundColor": "#05070c",
+        "fogDensity": 0.018,
+        "floorReflectivity": 0.35,
+        "vortexId": null,
+        "backgroundRepresentation": {
+          "type": "background_representation",
+          "mode": "dark_void_plate",
+          "coverage": 1,
+          "confidence": 0.5,
+          "collisionReady": false
+        }
+      },
+      "objects": [
+        {
+          "id": "obj_mixed_figure",
+          "label": "Replaceable Figure",
+          "category": "figure",
+          "representationType": "source_image_layer",
+          "assetId": null,
+          "position": [
+            0,
+            1.4,
+            0
+          ],
+          "rotation": [
+            0,
+            0,
+            0
+          ],
+          "scale": [
+            1,
+            1,
+            1
+          ],
+          "temporalState": "held",
+          "velocity": [
+            0,
+            0,
+            0
+          ],
+          "angularVelocity": [
+            0,
+            0,
+            0
+          ],
+          "collision": {
+            "shape": "capsule",
+            "radius": 0.4,
+            "halfHeight": 0.5,
+            "enabled": true
+          },
+          "physics": {
+            "mass": 2,
+            "restitution": 0.3,
+            "gravityScale": 1,
+            "isStatic": false
+          },
+          "visible": true,
+          "_expectedCandidateIds": [
+            "asset_2823934dcc_mwymexkb",
+            "asset_27d311c688_mwymexkb"
+          ]
+        }
+      ],
+      "simulation": {
+        "fixedDt": 0.016666666666666666,
+        "gravity": [
+          0,
+          -9.81,
+          0
+        ],
+        "linearDamping": 0.04,
+        "angularDamping": 0.08,
+        "restitution": 0.42,
+        "contactActivationImpulseThreshold": 0.15,
+        "seed": 20261126,
+        "tick": 0,
+        "initialState": [],
+        "tickLog": [],
+        "contactEvents": []
+      }
+    }
+  ],
+  "jobs": [],
+  "settings": {
+    "qualityTier": "high",
+    "reducedMotion": false,
+    "audioMuted": false,
+    "audioVolume": 0.55,
+    "defaultExperienceMode": "frozen_second"
+  }
+}

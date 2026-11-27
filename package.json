@@ -1,0 +1,21 @@
+{
+  "name": "frozen-aperture",
+  "version": "1.0.0",
+  "description": "An independent illustration-to-playable-world research lab and compiler.",
+  "type": "module",
+  "private": true,
+  "scripts": {
+    "build": "node scripts/build.mjs",
+    "check": "node scripts/check-syntax.mjs",
+    "test": "node tests/run-tests.mjs",
+    "test:browser": "node tests/browser-acceptance.mjs",
+    "qa": "node scripts/run-browser-qa.mjs",
+    "fixtures": "node fixtures/generate-fixtures.mjs"
+  },
+  "dependencies": {
+    "three": "0.170.0"
+  },
+  "devDependencies": {
+    "esbuild": "0.24.2"
+  }
+}

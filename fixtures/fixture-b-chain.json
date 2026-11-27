@@ -1,0 +1,310 @@
+{
+  "schemaVersion": "1.0.0",
+  "project": {
+    "id": "fixture_b_chain",
+    "name": "Fixture B — 3-Body Temporal Chain",
+    "revision": 1,
+    "createdAt": "2026-11-27T06:49:03.073Z",
+    "modifiedAt": "2026-11-27T06:49:03.073Z",
+    "isPublicFixture": true,
+    "activeSceneId": "scene_main",
+    "sourceIllustration": null
+  },
+  "sourceObjects": [],
+  "assets": [],
+  "scenes": [
+    {
+      "id": "scene_main",
+      "name": "Primary Scene",
+      "coordinateSystem": {
+        "units": "meters",
+        "upAxis": "Y",
+        "handedness": "right"
+      },
+      "cameras": {
+        "sourceCamera": {
+          "projection": "perspective",
+          "fovDeg": 42,
+          "near": 0.1,
+          "far": 200,
+          "position": [
+            0,
+            1.8,
+            12.5
+          ],
+          "target": [
+            0,
+            1.4,
+            0
+          ],
+          "up": [
+            0,
+            1,
+            0
+          ],
+          "imageWidth": 1600,
+          "imageHeight": 1000,
+          "calibrated": true,
+          "landmarks": []
+        },
+        "namedViews": [
+          {
+            "id": "source",
+            "label": "Source View",
+            "position": [
+              0,
+              1.8,
+              12.5
+            ],
+            "target": [
+              0,
+              1.4,
+              0
+            ],
+            "fovDeg": 42
+          },
+          {
+            "id": "side_left",
+            "label": "Side Left",
+            "position": [
+              -11.5,
+              2.2,
+              2.5
+            ],
+            "target": [
+              0,
+              1.4,
+              0
+            ],
+            "fovDeg": 42
+          },
+          {
+            "id": "side_right",
+            "label": "Side Right",
+            "position": [
+              11.5,
+              2.2,
+              2.5
+            ],
+            "target": [
+              0,
+              1.4,
+              0
+            ],
+            "fovDeg": 42
+          },
+          {
+            "id": "rear",
+            "label": "Rear Inspection",
+            "position": [
+              0,
+              2.4,
+              -12
+            ],
+            "target": [
+              0,
+              1.4,
+              0
+            ],
+            "fovDeg": 42
+          },
+          {
+            "id": "overhead",
+            "label": "Overhead",
+            "position": [
+              0,
+              13.5,
+              2.5
+            ],
+            "target": [
+              0,
+              0.8,
+              0
+            ],
+            "fovDeg": 46
+          }
+        ],
+        "bookmarks": []
+      },
+      "environment": {
+        "backgroundColor": "#05070c",
+        "fogDensity": 0.018,
+        "floorReflectivity": 0.35,
+        "vortexId": null,
+        "backgroundRepresentation": {
+          "type": "background_representation",
+          "mode": "dark_void_plate",
+          "coverage": 1,
+          "confidence": 0.5,
+          "collisionReady": false
+        }
+      },
+      "objects": [
+        {
+          "id": "chain_1",
+          "label": "Impact Weight",
+          "category": "impact_weight",
+          "representationType": "procedural_geometry",
+          "assetId": null,
+          "position": [
+            0,
+            3.6,
+            0
+          ],
+          "rotation": [
+            0,
+            0,
+            0
+          ],
+          "scale": [
+            1,
+            1,
+            1
+          ],
+          "temporalState": "held",
+          "velocity": [
+            0,
+            -3,
+            0
+          ],
+          "angularVelocity": [
+            0,
+            0,
+            0
+          ],
+          "collision": {
+            "shape": "sphere",
+            "radius": 0.45,
+            "enabled": true
+          },
+          "physics": {
+            "mass": 2,
+            "restitution": 0.5,
+            "gravityScale": 1,
+            "isStatic": false
+          },
+          "visible": true
+        },
+        {
+          "id": "chain_2",
+          "label": "Middle Relay",
+          "category": "fragment",
+          "representationType": "procedural_geometry",
+          "assetId": null,
+          "position": [
+            0,
+            2.2,
+            0
+          ],
+          "rotation": [
+            0,
+            0,
+            0
+          ],
+          "scale": [
+            1,
+            1,
+            1
+          ],
+          "temporalState": "held",
+          "velocity": [
+            0,
+            0,
+            0
+          ],
+          "angularVelocity": [
+            0,
+            0,
+            0
+          ],
+          "collision": {
+            "shape": "sphere",
+            "radius": 0.4,
+            "enabled": true
+          },
+          "physics": {
+            "mass": 1,
+            "restitution": 0.5,
+            "gravityScale": 1,
+            "isStatic": false
+          },
+          "visible": true
+        },
+        {
+          "id": "chain_3",
+          "label": "Lower Anchor",
+          "category": "fragment",
+          "representationType": "procedural_geometry",
+          "assetId": null,
+          "position": [
+            0,
+            0.9,
+            0
+          ],
+          "rotation": [
+            0,
+            0,
+            0
+          ],
+          "scale": [
+            1,
+            1,
+            1
+          ],
+          "temporalState": "held",
+          "velocity": [
+            0,
+            0,
+            0
+          ],
+          "angularVelocity": [
+            0,
+            0,
+            0
+          ],
+          "collision": {
+            "shape": "box",
+            "halfExtents": [
+              0.4,
+              0.4,
+              0.4
+            ],
+            "enabled": true
+          },
+          "physics": {
+            "mass": 1.2,
+            "restitution": 0.4,
+            "gravityScale": 1,
+            "isStatic": false
+          },
+          "visible": true
+        }
+      ],
+      "simulation": {
+        "fixedDt": 0.016666666666666666,
+        "gravity": [
+          0,
+          -9.81,
+          0
+        ],
+        "linearDamping": 0.04,
+        "angularDamping": 0.08,
+        "restitution": 0.42,
+        "contactActivationImpulseThreshold": 0.15,
+        "seed": 20261126,
+        "tick": 0,
+        "initialState": [],
+        "tickLog": [],
+        "contactEvents": []
+      }
+    }
+  ],
+  "jobs": [],
+  "settings": {
+    "qualityTier": "high",
+    "reducedMotion": false,
+    "audioMuted": false,
+    "audioVolume": 0.55,
+    "defaultExperienceMode": "frozen_second"
+  }
+}
