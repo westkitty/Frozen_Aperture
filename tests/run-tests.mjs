@@ -653,6 +653,51 @@ async function run() {
     assert.ok(maxZ > 0.15 && minZ < -0.15, `Expected positive front Z and negative back Z, got [${minZ}, ${maxZ}]`);
   });
 
+  await test('26. 1-Click Big Mac Hunyuan3D pipeline uploads cutout PNG, submits 3D job, polls PASS, and downloads validated GLB', async () => {
+    const am = new AssetManager();
+    const project = await createPublicCalibrationProject(am);
+    const sampleGlb = am.getBytes(project, project.assets[0].id);
+    const seenUrls = [];
+    const mockFetch = async (url, opts = {}) => {
+      seenUrls.push(`${opts.method || 'GET'} ${url}`);
+      if (url.includes('/api/library/images/import')) {
+        return { ok: true, status: 201, json: async () => ({ id: 'img_cutout_01', width: 256, height: 512, runId: 'run_1' }) };
+      }
+      if (url.includes('/api/3d/jobs')) {
+        const body = JSON.parse(opts.body);
+        assert.equal(body.sourceArtifactId, 'img_cutout_01');
+        assert.equal(body.mode, 'textured');
+        return { ok: true, status: 202, json: async () => ({ jobId: 'job_h3d_42' }) };
+      }
+      if (url.includes('/api/jobs/job_h3d_42')) {
+        return { ok: true, status: 200, json: async () => ({ id: 'job_h3d_42', status: 'PASS', results: [{ imageId: 'glb_h3d_42' }] }) };
+      }
+      if (url.includes('/api/media/glb_h3d_42/download')) {
+        return { ok: true, status: 200, arrayBuffer: async () => sampleGlb.buffer.slice(sampleGlb.byteOffset, sampleGlb.byteOffset + sampleGlb.byteLength) };
+      }
+      return { ok: false, status: 404, text: async () => 'not found' };
+    };
+
+    const dex = new DexDiffusionAdapter({ baseUrl: '/dex', fetchImpl: mockFetch });
+    const res = await dex.reconstructCutoutToGlb({
+      pngBytes: new Uint8Array([0x89, 0x50, 0x4E, 0x47]),
+      filename: 'obj_auto_01.png',
+      mode: 'textured',
+      project,
+      assetManager: am,
+      sourceObjectId: 'src_auto_01',
+      label: 'Character 01',
+      pollIntervalMs: 5,
+    });
+    assert.equal(res.sourceArtifactId, 'img_cutout_01');
+    assert.equal(res.remoteJobId, 'job_h3d_42');
+    assert.equal(res.mediaId, 'glb_h3d_42');
+    assert.ok(res.validation.valid);
+    assert.ok(seenUrls.some(u => u.startsWith('POST /dex/api/library/images/import')));
+    assert.ok(seenUrls.some(u => u.startsWith('POST /dex/api/3d/jobs')));
+    assert.ok(seenUrls.some(u => u.startsWith('GET /dex/api/media/glb_h3d_42/download')));
+  });
+
   const failed = results.filter(r => !r.passed);
   console.log(`\nSummary: ${results.length - failed.length}/${results.length} passed.`);
   if (failed.length > 0) {

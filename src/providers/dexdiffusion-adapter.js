@@ -160,19 +160,173 @@ export class DexDiffusionAdapter {
     }
   }
 
+  /**
+   * Uploads a cropped character PNG into Big Mac's canonical DexDiffusion Library
+   * via POST /api/library/images/import?name=... (verified against westkitty/Image_Gen).
+   * Returns { id, url, width, height, runId }.
+   */
+  async importImageToLibrary(pngBytes, filename = 'cutout.png') {
+    if (!this.baseUrl || !this.fetchImpl) throw new Error('DexDiffusion endpoint not configured.');
+    const safeName = encodeURIComponent(String(filename || 'cutout.png').slice(0, 120));
+    const res = await this.fetchImpl(`${this.baseUrl}/api/library/images/import?name=${safeName}`, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'image/png',
+        Accept: 'application/json',
+      },
+      body: pngBytes,
+    });
+    if (!res.ok) {
+      const text = await res.text().catch(() => '');
+      throw new Error(`DexDiffusion image import failed (HTTP ${res.status}): ${text.slice(0, 160)}`);
+    }
+    const data = await res.json();
+    if (!data?.id) throw new Error('DexDiffusion image import returned no artifact id.');
+    return data;
+  }
+
+  /**
+   * Decodes a data:image/png;base64,... URL into a Uint8Array without external dependencies.
+   */
+  static dataUrlToBytes(dataUrl) {
+    const idx = String(dataUrl || '').indexOf(',');
+    if (idx === -1) throw new Error('Invalid image data URL.');
+    const b64 = dataUrl.slice(idx + 1);
+    if (typeof atob === 'function') {
+      const bin = atob(b64);
+      const out = new Uint8Array(bin.length);
+      for (let i = 0; i < bin.length; i++) out[i] = bin.charCodeAt(i);
+      return out;
+    }
+    return new Uint8Array(Buffer.from(b64, 'base64'));
+  }
+
+  /**
+   * Extracts the output GLB mediaId from any verified westkitty/Image_Gen job response shape.
+   */
+  static extractOutputMediaId(job) {
+    if (!job) return null;
+    if (job.outputMediaId) return job.outputMediaId;
+    if (job.artifactId) return job.artifactId;
+    if (job.mediaId) return job.mediaId;
+    if (Array.isArray(job.results)) {
+      const first = job.results.find(r => r && (r.imageId || r.artifactId || r.mediaId));
+      if (first) return first.imageId || first.artifactId || first.mediaId;
+    }
+    if (Array.isArray(job.generic?.artifacts) && job.generic.artifacts.length > 0) {
+      return job.generic.artifacts[0];
+    }
+    if (Array.isArray(job.artifacts) && job.artifacts.length > 0) {
+      return job.artifacts[0];
+    }
+    return null;
+  }
+
+  /**
+   * Full 1-click end-to-end pipeline:
+   * 1. Uploads character cutout PNG -> POST /api/library/images/import
+   * 2. Starts Hunyuan3D Swift job   -> POST /api/3d/jobs ({ mode, sourceArtifactId })
+   * 3. Polls until completion       -> GET  /api/jobs/:jobId
+   * 4. Downloads & validates GLB    -> GET  /api/media/:id/download
+   */
+  async reconstructCutoutToGlb({
+    pngBytes = null,
+    dataUrl = null,
+    filename = 'character.png',
+    mode = 'textured',
+    project,
+    assetManager,
+    sourceObjectId = null,
+    label = 'Hunyuan3D Character',
+    onProgress = null,
+    signal = null,
+    pollIntervalMs = 1800,
+    pollTimeoutMs = 420000,
+  }) {
+    if (!this.baseUrl) throw new Error('Big Mac DexDiffusion endpoint not configured.');
+    const bytes = pngBytes || DexDiffusionAdapter.dataUrlToBytes(dataUrl);
+
+    if (onProgress) onProgress({ stage: 'uploading', progress: 10, label: `Uploading ${label} to Big Mac…` });
+    const imported = await this.importImageToLibrary(bytes, filename);
+
+    if (signal?.aborted) throw new Error('Reconstruction cancelled.');
+    if (onProgress) onProgress({ stage: 'starting', progress: 20, label: `Starting Hunyuan3D (${mode}) for ${label}…` });
+
+    const startRes = await this.fetchImpl(`${this.baseUrl}/api/3d/jobs`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', Accept: 'application/json' },
+      body: JSON.stringify({ mode, sourceArtifactId: imported.id }),
+    });
+    if (!startRes.ok) {
+      const text = await startRes.text().catch(() => '');
+      throw new Error(`DexDiffusion 3D job start failed (HTTP ${startRes.status}): ${text.slice(0, 160)}`);
+    }
+    const created = await startRes.json();
+    const remoteJobId = created.jobId || created.id;
+    if (!remoteJobId) throw new Error('DexDiffusion /api/3d/jobs returned no jobId.');
+
+    const finalJob = await this.pollJob(remoteJobId, {
+      intervalMs: pollIntervalMs,
+      timeoutMs: pollTimeoutMs,
+      signal,
+      onProgress: (p) => {
+        if (onProgress) {
+          onProgress({
+            stage: 'running',
+            progress: typeof p?.progress === 'number' ? Math.max(25, Math.min(90, p.progress)) : 55,
+            label: p?.label || `Hunyuan3D reconstructing ${label}…`,
+            remoteJobId,
+          });
+        }
+      },
+    });
+
+    if (['FAIL', 'FAILED', 'ERROR', 'INTERRUPTED', 'CANCELLED', 'CANCELED'].includes(finalJob.status)) {
+      throw new Error(`Hunyuan3D job ${finalJob.status}: ${finalJob.error || finalJob.firstFailedGate || 'see Big Mac console log'}`);
+    }
+
+    const mediaId = DexDiffusionAdapter.extractOutputMediaId(finalJob);
+    if (!mediaId) {
+      throw new Error(`Hunyuan3D job ${remoteJobId} finished (${finalJob.status}) but returned no output GLB media ID.`);
+    }
+
+    if (onProgress) onProgress({ stage: 'downloading', progress: 92, label: `Downloading validated 3D GLB for ${label}…`, remoteJobId });
+    const reg = await this.downloadAndRegisterGlb(mediaId, {
+      project,
+      assetManager,
+      sourceObjectId,
+      label: `${label} (Hunyuan3D ${mode})`,
+    });
+
+    if (onProgress) onProgress({ stage: 'done', progress: 100, label: `3D GLB ready for ${label}.`, remoteJobId });
+    return {
+      asset: reg.asset,
+      validation: reg.validation,
+      sourceArtifactId: imported.id,
+      remoteJobId,
+      mediaId,
+    };
+  }
+
   async runJob({ mode = 'mesh', input = {}, receipt }) {
     if (!this.baseUrl) throw new Error('DexDiffusion endpoint not configured.');
     if (!['mesh', 'textured'].includes(mode)) {
       throw new Error(`Unsupported DexDiffusion 3D mode: ${mode} (expected 'mesh' or 'textured').`);
     }
-    if (!input.sourceArtifactId) {
-      throw new Error('DexDiffusion /api/3d/jobs requires a registered sourceArtifactId.');
+    let sourceArtifactId = input.sourceArtifactId;
+    if (!sourceArtifactId && (input.pngBytes || input.dataUrl)) {
+      const bytes = input.pngBytes || DexDiffusionAdapter.dataUrlToBytes(input.dataUrl);
+      const imported = await this.importImageToLibrary(bytes, input.filename || 'cutout.png');
+      sourceArtifactId = imported.id;
+    }
+    if (!sourceArtifactId) {
+      throw new Error('DexDiffusion /api/3d/jobs requires a sourceArtifactId or cutout image.');
     }
 
     const res = await this.fetchImpl(`${this.baseUrl}/api/3d/jobs`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json', Accept: 'application/json' },
-      body: JSON.stringify({ mode, sourceArtifactId: input.sourceArtifactId }),
+      body: JSON.stringify({ mode, sourceArtifactId }),
     });
     if (!res.ok) {
       const text = await res.text().catch(() => '');
@@ -188,14 +342,14 @@ export class DexDiffusionAdapter {
         intervalMs: input.pollIntervalMs ?? 1500,
         timeoutMs: input.pollTimeoutMs ?? 300000,
         onProgress: (p) => {
-          if (typeof p.progress === 'number') receipt.progress = p.progress;
-          if (p.label) receipt.message = p.label;
+          if (typeof p?.progress === 'number') receipt.progress = p.progress;
+          if (p?.label) receipt.message = p.label;
         },
       });
-      if (finalJob.status === 'FAILED' || finalJob.status === 'CANCELLED') {
+      if (['FAIL', 'FAILED', 'ERROR', 'INTERRUPTED', 'CANCELLED', 'CANCELED'].includes(finalJob.status)) {
         throw new Error(`DexDiffusion remote job ${finalJob.status}: ${finalJob.error || 'see remote log'}`);
       }
-      const mediaId = finalJob.outputMediaId || finalJob.artifactId || finalJob.mediaId;
+      const mediaId = DexDiffusionAdapter.extractOutputMediaId(finalJob);
       if (mediaId && input.assetManager && input.project) {
         const reg = await this.downloadAndRegisterGlb(mediaId, {
           project: input.project,
@@ -219,12 +373,16 @@ export class DexDiffusionAdapter {
   }
 
   /**
-   * Polls GET /api/jobs/:jobId until terminal state (DONE/COMPLETED/FAILED/CANCELLED) (#6).
+   * Polls GET /api/jobs/:jobId until terminal state (PASS/COMPLETE/DONE/FAIL/CANCELLED) (#6).
    */
-  async pollJob(remoteJobId, { intervalMs = 1500, timeoutMs = 300000, onProgress = null } = {}) {
+  async pollJob(remoteJobId, { intervalMs = 1500, timeoutMs = 300000, onProgress = null, signal = null } = {}) {
     if (!this.baseUrl || !this.fetchImpl) throw new Error('DexDiffusion endpoint not configured.');
     const deadline = Date.now() + timeoutMs;
     while (Date.now() < deadline) {
+      if (signal?.aborted) {
+        await this.cancelJob(null, { remoteJobId });
+        throw new Error('DexDiffusion job cancelled by user.');
+      }
       const res = await this.fetchImpl(`${this.baseUrl}/api/jobs/${encodeURIComponent(remoteJobId)}`, {
         method: 'GET',
         headers: { Accept: 'application/json' },
@@ -233,7 +391,7 @@ export class DexDiffusionAdapter {
       const job = await res.json();
       if (onProgress && job.progress) onProgress(job.progress);
       const st = String(job.status || job.state || '').toUpperCase();
-      if (['DONE', 'COMPLETED', 'SUCCEEDED', 'FAILED', 'ERROR', 'CANCELLED', 'CANCELED'].includes(st)) {
+      if (['PASS', 'COMPLETE', 'DONE', 'COMPLETED', 'SUCCEEDED', 'FAIL', 'FAILED', 'ERROR', 'INTERRUPTED', 'CANCELLED', 'CANCELED'].includes(st)) {
         return { ...job, status: st };
       }
       await new Promise(r => setTimeout(r, intervalMs));

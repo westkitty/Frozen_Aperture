@@ -1,5 +1,5 @@
 {
-  "generatedAt": "2026-11-27T22:08:09.275Z",
+  "generatedAt": "2026-11-27T23:26:46.676Z",
   "environment": {
     "browser": "Chrome/158.0.8127.36",
     "renderingBackend": "Headless Chromium ANGLE SwiftShader (software WebGL 2 — NOT physical GPU/mobile benchmark)",
@@ -8,8 +8,8 @@
   },
   "artifact": {
     "path": "index.html",
-    "sha256": "2dc46411472d8d6f22d8628b11a35c1d7eed29332a708fb9a80eb7957a4191fa",
-    "bytes": 856891
+    "sha256": "d7f291530a5fb902cd4a1269cae89f46dcab1d73cef7d3b443a733ecf347f1b3",
+    "bytes": 868140
   },
   "checks": [
     {
@@ -75,7 +75,7 @@
     {
       "name": "On-demand idle rendering skips redundant GPU frames when static (#19)",
       "passed": true,
-      "detail": "skipped=118"
+      "detail": "skipped=119"
     },
     {
       "name": "Visual pixel-diff confirms distinct Shaded vs Wireframe renders (#25)",
@@ -104,9 +104,9 @@
     "note": "Measured under headless SwiftShader software WebGL 2; not representative of native hardware-accelerated GPU frame rates.",
     "medianFrameTimeMs": 16.7,
     "p95FrameTimeMs": 100,
-    "drawCalls": 7,
-    "triangles": 12730,
-    "geometries": 18,
+    "drawCalls": 11,
+    "triangles": 82,
+    "geometries": 21,
     "textures": 6,
     "objectCount": 4
   },

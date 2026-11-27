@@ -62,6 +62,9 @@ class FrozenApertureApp {
     this.gizmoSnap = false;
     this.lastIouResult = null;
     this.providerStatuses = [];
+    this.dexMode = 'textured';
+    this.reconAbortController = null;
+    this.reconStatusMap = new Map();
     this.lastFrameTime = 0;
     this.frameTimes = [];
     this.toastTimer = null;
@@ -69,6 +72,18 @@ class FrozenApertureApp {
 
   async init() {
     this.mountShell();
+
+    // Restore saved Big Mac DexDiffusion endpoint (or use same-origin /dex proxy when launched via serve_with_bigmac_proxy.py)
+    try {
+      const savedUrl = window.localStorage?.getItem('fa_dex_url');
+      if (savedUrl) {
+        this.dexProvider.setBaseUrl(savedUrl);
+      } else if (window.location.protocol === 'http:' && window.location.port === '8788') {
+        this.dexProvider.setBaseUrl('/dex');
+      }
+    } catch (_) {
+      // Ignore storage access restrictions on file://
+    }
 
     // Load embedded standalone project if present, otherwise initialize Public Calibration Scene
     if (window.__FROZEN_APERTURE_EMBEDDED_PROJECT__) {
@@ -732,8 +747,9 @@ class FrozenApertureApp {
             <button class="wb-btn" id="btn-reparse-image">Re-Parse</button>
           </div>
           <div class="wb-row">
-            <button class="wb-btn primary" id="btn-goto-objects">Refine Masks →</button>
-            <button class="wb-btn" id="btn-toggle-bg-3d">${this.bgBackdropVisible ? 'Hide Background Plate' : 'Show Background Plate'}</button>
+            <button class="wb-btn primary" id="btn-goto-recon">Reconstruct 3D (Big Mac) →</button>
+            <button class="wb-btn" id="btn-goto-objects">Refine Masks</button>
+            <button class="wb-btn" id="btn-toggle-bg-3d">${this.bgBackdropVisible ? 'Hide BG Plate' : 'Show BG Plate'}</button>
           </div>
         ` : '<div class="empty-state">No source illustration uploaded yet. Click "Upload Image…" or drag any image onto the window.</div>'}
       </div>
@@ -775,6 +791,10 @@ class FrozenApertureApp {
       await this.runWithBusyButton(e.currentTarget, 'Parsing…', async () => {
         await this.applyIngestedIllustration(src, { sensitivity: nextSens });
       });
+    });
+
+    sb.querySelector('#btn-goto-recon')?.addEventListener('click', () => {
+      this.setStage('reconstruction');
     });
 
     sb.querySelector('#btn-goto-objects')?.addEventListener('click', () => {
@@ -1026,12 +1046,129 @@ class FrozenApertureApp {
     });
   }
 
+  async reconstructSceneObjectTo3D(obj, signal = null) {
+    if (!obj || !obj.layerDataUrl) {
+      throw new Error(`Object "${obj?.label || 'unknown'}" has no extracted cutout image.`);
+    }
+    if (!this.dexProvider.baseUrl) {
+      throw new Error('Set your Big Mac endpoint (or launch via python3 scripts/serve_with_bigmac_proxy.py) first.');
+    }
+    this.reconStatusMap.set(obj.id, { state: 'running', text: 'Uploading cutout…' });
+    if (this.workbenchOpen && this.activeStage === 'reconstruction') this.renderSidebar();
+
+    try {
+      const res = await this.dexProvider.reconstructCutoutToGlb({
+        dataUrl: obj.layerDataUrl,
+        filename: `${obj.id}.png`,
+        mode: this.dexMode || 'textured',
+        project: this.project,
+        assetManager: this.assetManager,
+        sourceObjectId: obj.sourceObjectId || null,
+        label: obj.label,
+        signal,
+        onProgress: (p) => {
+          this.reconStatusMap.set(obj.id, { state: 'running', text: p.label || `${p.progress || 0}%` });
+          if (this.workbenchOpen && this.activeStage === 'reconstruction') this.renderSidebar();
+        },
+      });
+
+      // Automatically bind real neural 3D GLB onto the scene object, preserving position, ID & physics
+      this.assetManager.bindAssetToSceneObject(this.project, this.scene, obj.id, res.asset.id, {
+        representationType: 'volumetric_rigid_mesh',
+        reason: `Hunyuan3D Swift (${this.dexMode}) reconstruction via Big Mac`,
+      });
+      this.assetManager.fitCollisionProxyFromAsset(this.project, obj, res.asset.id, 'capsule');
+      this.sim.captureInitialState();
+      await this.renderer.upsertObjectMesh(obj);
+
+      this.project.jobs.push({
+        id: `job_dex_${Date.now().toString(36)}`,
+        providerId: this.dexProvider.id,
+        sourceObjectId: obj.sourceObjectId,
+        mode: this.dexMode,
+        state: 'completed',
+        remoteJobId: res.remoteJobId,
+        assetId: res.asset.id,
+        message: `Reconstructed ${obj.label} -> ${res.asset.id}`,
+        createdAt: new Date().toISOString(),
+      });
+
+      this.reconStatusMap.set(obj.id, { state: 'done', text: '3D GLB Ready' });
+      this.notify(`3D GLB ready for ${obj.label}! Orbit around to inspect.`);
+      if (this.workbenchOpen && this.activeStage === 'reconstruction') this.renderSidebar();
+      return res;
+    } catch (err) {
+      const msg = String(err.message || err);
+      const hint = msg.toLowerCase().includes('failed to fetch')
+        ? 'Cannot reach Big Mac (CORS or offline). Launch with: python3 scripts/serve_with_bigmac_proxy.py'
+        : msg;
+      this.reconStatusMap.set(obj.id, { state: 'error', text: hint.slice(0, 72) });
+      this.project.jobs.push({
+        id: `job_dex_${Date.now().toString(36)}`,
+        providerId: this.dexProvider.id,
+        sourceObjectId: obj.sourceObjectId,
+        mode: this.dexMode,
+        state: 'failed',
+        message: hint,
+        createdAt: new Date().toISOString(),
+      });
+      if (this.workbenchOpen && this.activeStage === 'reconstruction') this.renderSidebar();
+      throw new Error(hint);
+    }
+  }
+
+  async reconstructAllCharactersTo3D() {
+    const candidates = this.scene.objects.filter(o => o.layerDataUrl && o.representationType !== 'volumetric_rigid_mesh');
+    if (candidates.length === 0) {
+      this.notify('No un-reconstructed character cutouts found. Upload an image first.', 'warn');
+      return;
+    }
+    if (!this.dexProvider.baseUrl) {
+      this.notify('Enter your Big Mac URL (or run scripts/serve_with_bigmac_proxy.py) first.', 'warn');
+      return;
+    }
+    if (this.reconAbortController) {
+      this.notify('A 3D reconstruction batch is already running.', 'warn');
+      return;
+    }
+
+    const ctrl = new AbortController();
+    this.reconAbortController = ctrl;
+    this.renderSidebar();
+
+    let okCount = 0;
+    try {
+      for (let i = 0; i < candidates.length; i++) {
+        if (ctrl.signal.aborted) break;
+        const obj = candidates[i];
+        this.notify(`Big Mac Hunyuan3D (${i + 1}/${candidates.length}): reconstructing ${obj.label}…`);
+        try {
+          await this.reconstructSceneObjectTo3D(obj, ctrl.signal);
+          okCount++;
+        } catch (err) {
+          this.notify(err.message, 'error');
+          if (ctrl.signal.aborted || err.message.includes('Cannot reach Big Mac')) break;
+        }
+      }
+      if (okCount > 0) {
+        this.notify(`Finished! Upgraded ${okCount}/${candidates.length} characters to real 3D Hunyuan3D GLB models.`);
+      }
+    } finally {
+      this.reconAbortController = null;
+      if (this.workbenchOpen && this.activeStage === 'reconstruction') this.renderSidebar();
+    }
+  }
+
   renderReconstructionPanel(sb) {
     const jobs = this.project.jobs || [];
+    const cutouts = this.scene.objects.filter(o => o.layerDataUrl);
+    const pendingCount = cutouts.filter(o => o.representationType !== 'volumetric_rigid_mesh').length;
+    const isRunning = Boolean(this.reconAbortController);
+
     sb.innerHTML = `
-      <h2 class="stage-heading">Reconstruction Providers</h2>
+      <h2 class="stage-heading">3D Reconstruction (Big Mac)</h2>
       <div class="wb-section">
-        <h3 class="wb-title">Available Providers</h3>
+        <h3 class="wb-title">Big Mac Hunyuan3D Connection</h3>
         ${this.providerStatuses.map(p => `
           <div class="wb-list-item" style="flex-direction:column;align-items:flex-start;cursor:default;margin-bottom:6px">
             <div style="display:flex;justify-content:space-between;width:100%">
@@ -1042,9 +1179,50 @@ class FrozenApertureApp {
           </div>
         `).join('')}
         <div class="wb-row">
-          <input class="wb-input" id="in-dex-url" aria-label="Local DexDiffusion endpoint URL" placeholder="http://big-mac.local:8787 (optional)" value="${escapeHtml(this.dexProvider.baseUrl)}" style="flex:1" />
-          <button class="wb-btn" id="btn-probe-providers">Probe 3D & World</button>
+          <input class="wb-input" id="in-dex-url" aria-label="Big Mac DexDiffusion endpoint URL" placeholder="/dex or http://big-mac.local:8787" value="${escapeHtml(this.dexProvider.baseUrl)}" style="flex:1" />
+          <button class="wb-btn" id="btn-probe-providers">Probe</button>
         </div>
+        <div class="wb-row">
+          <label class="mono" for="sel-dex-mode">3D Mode:</label>
+          <select class="wb-select" id="sel-dex-mode" aria-label="Hunyuan3D reconstruction mode" style="flex:1">
+            <option value="textured" ${this.dexMode === 'textured' ? 'selected' : ''}>Textured 3D GLB (Full Color)</option>
+            <option value="mesh" ${this.dexMode === 'mesh' ? 'selected' : ''}>Fast Mesh GLB (Geometry Only)</option>
+          </select>
+        </div>
+        <div class="notice">
+          For zero-CORS Brave access to Big Mac, launch with:<br/>
+          <code>python3 scripts/serve_with_bigmac_proxy.py</code> and open <code>http://127.0.0.1:8788/index.html</code> (auto-connects via <code>/dex</code>).
+        </div>
+      </div>
+
+      <div class="wb-section">
+        <h3 class="wb-title">1-Click Character 3D Pipeline (${cutouts.length})</h3>
+        ${cutouts.length > 0 ? `
+          <div class="wb-row">
+            <button class="wb-btn primary" id="btn-recon-all" ${isRunning || pendingCount === 0 ? 'disabled' : ''}>
+              ${isRunning ? 'Reconstructing on Big Mac…' : `Reconstruct All in 3D (${pendingCount})`}
+            </button>
+            ${isRunning ? '<button class="wb-btn danger" id="btn-recon-cancel">Cancel</button>' : ''}
+          </div>
+          <div class="wb-list">
+            ${cutouts.map(o => {
+              const st = this.reconStatusMap.get(o.id);
+              const is3D = o.representationType === 'volumetric_rigid_mesh' && o.assetId;
+              const badgeCls = is3D ? 'ok' : st?.state === 'running' ? 'accent' : st?.state === 'error' ? 'err' : '';
+              const badgeText = is3D ? '3D GLB' : st?.text || '2.5D Layer';
+              return `
+                <div class="wb-list-item" style="cursor:default;gap:8px;align-items:center">
+                  <img src="${o.layerDataUrl}" alt="${escapeHtml(o.label)}" style="width:36px;height:36px;object-fit:contain;background:#05070c;border:1px solid var(--border-subtle);border-radius:4px;flex-shrink:0" />
+                  <div style="flex:1;min-width:0">
+                    <div style="font-size:12px;font-weight:600;white-space:nowrap;overflow:hidden;text-overflow:ellipsis">${escapeHtml(o.label)}</div>
+                    <span class="badge ${badgeCls}">${escapeHtml(badgeText)}</span>
+                  </div>
+                  <button class="wb-btn" data-recon-obj="${escapeHtml(o.id)}" ${isRunning ? 'disabled' : ''}>${is3D ? 'Re-Run' : '3D'}</button>
+                </div>
+              `;
+            }).join('')}
+          </div>
+        ` : '<div class="empty-state">Upload any image first (Play bar → Upload Image) to parse characters for 1-click Hunyuan3D reconstruction.</div>'}
       </div>
 
       <div class="wb-section">
@@ -1071,14 +1249,62 @@ class FrozenApertureApp {
       </div>
     `;
 
+    sb.querySelector('#sel-dex-mode')?.addEventListener('change', (e) => {
+      this.dexMode = e.target.value;
+    });
+
     sb.querySelector('#btn-probe-providers')?.addEventListener('click', async (e) => {
       await this.runWithBusyButton(e.currentTarget, 'Probing…', async () => {
-        const url = sb.querySelector('#in-dex-url')?.value || '';
+        const url = (sb.querySelector('#in-dex-url')?.value || '').trim();
         this.dexProvider.setBaseUrl(url);
+        try {
+          if (url) window.localStorage?.setItem('fa_dex_url', url);
+          else window.localStorage?.removeItem('fa_dex_url');
+        } catch (_) {}
         this.providerStatuses = await this.providers.discoverAll();
         const worldStatus = await this.dexProvider.probeWorldWorkers();
         this.renderSidebar();
-        this.notify(`Probed providers (World/SHARP: ${worldStatus.state}).`);
+        const dex = this.providerStatuses.find(p => p.id === 'dexdiffusion_local');
+        this.notify(`Big Mac 3D: ${dex?.status?.state || 'unknown'} · World/SHARP: ${worldStatus.state}`);
+      });
+    });
+
+    sb.querySelector('#btn-recon-all')?.addEventListener('click', () => {
+      const url = (sb.querySelector('#in-dex-url')?.value || '').trim();
+      if (url && url !== this.dexProvider.baseUrl) {
+        this.dexProvider.setBaseUrl(url);
+        try { window.localStorage?.setItem('fa_dex_url', url); } catch (_) {}
+      }
+      this.reconstructAllCharactersTo3D();
+    });
+
+    sb.querySelector('#btn-recon-cancel')?.addEventListener('click', () => {
+      if (this.reconAbortController) {
+        this.reconAbortController.abort();
+        this.notify('Cancelling active Hunyuan3D job on Big Mac…', 'warn');
+      }
+    });
+
+    sb.querySelectorAll('[data-recon-obj]').forEach(btn => {
+      btn.addEventListener('click', async () => {
+        const url = (sb.querySelector('#in-dex-url')?.value || '').trim();
+        if (url && url !== this.dexProvider.baseUrl) {
+          this.dexProvider.setBaseUrl(url);
+          try { window.localStorage?.setItem('fa_dex_url', url); } catch (_) {}
+        }
+        const obj = this.scene.objects.find(o => o.id === btn.dataset.reconObj);
+        if (!obj) return;
+        const ctrl = new AbortController();
+        this.reconAbortController = ctrl;
+        this.renderSidebar();
+        try {
+          await this.reconstructSceneObjectTo3D(obj, ctrl.signal);
+        } catch (err) {
+          this.notify(err.message, 'error');
+        } finally {
+          this.reconAbortController = null;
+          if (this.workbenchOpen && this.activeStage === 'reconstruction') this.renderSidebar();
+        }
       });
     });
 
