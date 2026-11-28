@@ -241,12 +241,12 @@ export class DexDiffusionAdapter {
     onProgress = null,
     signal = null,
     pollIntervalMs = 1800,
-    pollTimeoutMs = 420000,
+    pollTimeoutMs = 960000,
   }) {
     if (!this.baseUrl) throw new Error('Big Mac DexDiffusion endpoint not configured.');
     const bytes = pngBytes || DexDiffusionAdapter.dataUrlToBytes(dataUrl);
 
-    if (onProgress) onProgress({ stage: 'uploading', progress: 10, label: `Uploading ${label} to Big Mac…` });
+    if (onProgress) onProgress({ stage: 'uploading', progress: 10, label: `Uploading ${label} to DexDiffusion…` });
     const imported = await this.importImageToLibrary(bytes, filename);
 
     if (signal?.aborted) throw new Error('Reconstruction cancelled.');
@@ -262,8 +262,8 @@ export class DexDiffusionAdapter {
       throw new Error(`DexDiffusion 3D job start failed (HTTP ${startRes.status}): ${text.slice(0, 160)}`);
     }
     const created = await startRes.json();
-    const remoteJobId = created.jobId || created.id;
-    if (!remoteJobId) throw new Error('DexDiffusion /api/3d/jobs returned no jobId.');
+    const remoteJobId = created.job_id || created.jobId || created.id;
+    if (!remoteJobId) throw new Error('DexDiffusion /api/3d/jobs returned no job_id.');
 
     const finalJob = await this.pollJob(remoteJobId, {
       intervalMs: pollIntervalMs,
@@ -333,7 +333,7 @@ export class DexDiffusionAdapter {
       throw new Error(`DexDiffusion job submission failed (HTTP ${res.status}): ${text.slice(0, 160)}`);
     }
     const created = await res.json();
-    receipt.remoteJobId = created.jobId || created.id || null;
+    receipt.remoteJobId = created.job_id || created.jobId || created.id || null;
     receipt.message = `Submitted to DexDiffusion (remote job ${receipt.remoteJobId || 'pending'}).`;
 
     // Optional live polling + auto-download & validation (#6)

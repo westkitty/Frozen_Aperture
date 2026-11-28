@@ -1179,7 +1179,7 @@ class FrozenApertureApp {
           </div>
         `).join('')}
         <div class="wb-row">
-          <input class="wb-input" id="in-dex-url" aria-label="Big Mac DexDiffusion endpoint URL" placeholder="/dex or http://big-mac.local:8787" value="${escapeHtml(this.dexProvider.baseUrl)}" style="flex:1" />
+          <input class="wb-input" id="in-dex-url" aria-label="DexDiffusion Operator Console endpoint URL" placeholder="/dex or http://127.0.0.1:31337" value="${escapeHtml(this.dexProvider.baseUrl)}" style="flex:1" />
           <button class="wb-btn" id="btn-probe-providers">Probe</button>
         </div>
         <div class="wb-row">

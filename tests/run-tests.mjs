@@ -667,7 +667,7 @@ async function run() {
         const body = JSON.parse(opts.body);
         assert.equal(body.sourceArtifactId, 'img_cutout_01');
         assert.equal(body.mode, 'textured');
-        return { ok: true, status: 202, json: async () => ({ jobId: 'job_h3d_42' }) };
+        return { ok: true, status: 202, json: async () => ({ job_id: 'job_h3d_42' }) };
       }
       if (url.includes('/api/jobs/job_h3d_42')) {
         return { ok: true, status: 200, json: async () => ({ id: 'job_h3d_42', status: 'PASS', results: [{ imageId: 'glb_h3d_42' }] }) };

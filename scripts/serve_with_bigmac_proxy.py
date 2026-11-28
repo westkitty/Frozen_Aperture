@@ -23,7 +23,7 @@ ROOT_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 
 
 class FrozenApertureProxyHandler(http.server.SimpleHTTPRequestHandler):
-    bigmac_target = "http://big-mac.local:8787"
+    bigmac_target = "http://127.0.0.1:31337"
 
     def __init__(self, *args, **kwargs):
         super().__init__(*args, directory=ROOT_DIR, **kwargs)
@@ -42,7 +42,7 @@ class FrozenApertureProxyHandler(http.server.SimpleHTTPRequestHandler):
 
         req = urllib.request.Request(upstream_url, data=body, headers=fwd_headers, method=method)
         try:
-            with urllib.request.urlopen(req, timeout=300) as resp:
+            with urllib.request.urlopen(req, timeout=960) as resp:
                 data = resp.read()
                 self.send_response(resp.status)
                 ctype = resp.headers.get("Content-Type", "application/octet-stream")
@@ -59,7 +59,7 @@ class FrozenApertureProxyHandler(http.server.SimpleHTTPRequestHandler):
             self.end_headers()
             self.wfile.write(err_body)
         except Exception as e:
-            msg = ('{"error":"Big Mac unreachable via proxy","detail":"%s"}' % str(e).replace('"', "'")).encode("utf-8")
+            msg = ('{"error":"DexDiffusion unreachable via proxy","detail":"%s"}' % str(e).replace('"', "'")).encode("utf-8")
             self.send_response(502)
             self.send_header("Content-Type", "application/json")
             self.send_header("Content-Length", str(len(msg)))
@@ -78,9 +78,9 @@ class FrozenApertureProxyHandler(http.server.SimpleHTTPRequestHandler):
 
 
 def main():
-    parser = argparse.ArgumentParser(description="Serve Frozen Aperture with Big Mac Hunyuan3D proxy")
-    parser.add_argument("--port", type=int, default=8788, help="Local port (default: 8788)")
-    parser.add_argument("--target", default="http://big-mac.local:8787", help="Big Mac DexDiffusion URL")
+    parser = argparse.ArgumentParser(description="Serve Frozen Aperture with DexDiffusion / Big Mac Hunyuan3D proxy")
+    parser.add_argument("--port", type=int, default=8788, help="Local Frozen Aperture port (default: 8788)")
+    parser.add_argument("--target", default="http://127.0.0.1:31337", help="DexDiffusion Operator Console URL (default: http://127.0.0.1:31337)")
     args = parser.parse_args()
 
     FrozenApertureProxyHandler.bigmac_target = args.target.rstrip("/")
@@ -88,6 +88,12 @@ def main():
     with socketserver.ThreadingTCPServer(("127.0.0.1", args.port), FrozenApertureProxyHandler) as httpd:
         print(f"Frozen Aperture running at http://127.0.0.1:{args.port}/index.html")
         print(f"Proxying /dex/* -> {FrozenApertureProxyHandler.bigmac_target}/*")
+        try:
+            with urllib.request.urlopen(f"{FrozenApertureProxyHandler.bigmac_target}/api/3d/workers", timeout=5) as r:
+                print(f"DexDiffusion 3D bridge status: CONNECTED (HTTP {r.status})")
+        except Exception as e:
+            print(f"WARNING: DexDiffusion not reachable at {FrozenApertureProxyHandler.bigmac_target} ({e})")
+            print("Make sure DexDiffusion Operator Console (westkitty/Image_Gen) is running on port 31337, or pass --target <url>.")
         try:
             httpd.serve_forever()
         except KeyboardInterrupt:
